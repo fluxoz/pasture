@@ -19,6 +19,9 @@ SSH: one owner, a private network, and never the public internet.
   after 120 seconds. Authenticator sign counters are checked when non-zero.
 - Enrollment abuse: enrollment is off by default; when on, it needs a token
   compared in constant time, which is burned (persistently) on first use.
+  `pasture-enroll` shows it as a QR code (in the URL fragment, never sent to
+  the server or logged); anyone who sees that code before you scan it could
+  enroll first, and the gateway logs every enrollment.
 - Command injection: terminals run a fixed argv per target kind; names and IDs
   are validated by pattern and against live state. The herdr integration
   calls a fixed set of methods with validated parameters and never forwards

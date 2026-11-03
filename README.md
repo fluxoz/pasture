@@ -133,20 +133,24 @@ Let's Encrypt certificate via `security.acme`.
 ## Enrollment
 
 1. Set `enrollment.enable = true`, deploy.
-2. On the phone, open `https://<hostName>/` in Safari, then Share → **Add to
-   Home Screen**, and open the installed app. Enroll *inside the installed
-   app*: home-screen apps have their own cookie jar (the passkey itself is
-   shared through iCloud Keychain).
-3. Paste the enrollment token (don't put it in a URL), give the passkey a
-   label, tap **Create passkey**, confirm with Face ID. You are logged in.
-4. The gateway logs the new credential as one JSON line
+2. On the host, as `user`, run `pasture-enroll`. It prints a QR code of
+   `https://<hostName>/enroll#t=<token>`; the token is in the fragment, so the
+   browser never sends it to the server.
+3. Scan it with the phone's camera and open the link. The token is filled in;
+   tap **Create passkey** and confirm with Face ID. You are logged in.
+   (No camera handy: open `https://<hostName>/` and paste the token instead.)
+4. Install the app: Share → **Add to Home Screen**, open it, tap **Unlock**.
+   Home-screen apps have their own cookie jar, so they log in once on their
+   own; the passkey itself is shared through iCloud Keychain.
+5. The gateway logs the new credential as one JSON line
    (`journalctl --user -u pasture`) and keeps it in
    `~/.local/state/pasture/enrolled.json` while enrollment is on.
-5. Copy that JSON object into your credentials secret (a JSON list), set
+6. Copy that JSON object into your credentials secret (a JSON list), set
    `enrollment.enable = false`, rotate the enrollment token, deploy. From then
    on only the declared passkeys work and `/enroll` is a 404.
 
-To add another device later, repeat with a new token.
+The token works once: after the first enrollment `pasture-enroll` says so. To
+add another device later, rotate the token, redeploy and run it again.
 
 ## Options
 
@@ -188,8 +192,8 @@ three `secrets.*` paths.
 
 ## iOS notes
 
-- Install to the home screen **before** enrolling, and log in from the
-  installed app. Safari and the installed app do not share cookies.
+- Safari and the installed app do not share cookies: after enrolling in
+  Safari (the QR code opens there), the installed app needs one Unlock.
 - With a private CA: install its root as a profile and turn it on under
   Settings → General → About → Certificate Trust Settings.
 - The iOS keyboard's own dictation may send audio to Apple. The app's mic

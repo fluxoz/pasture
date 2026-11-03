@@ -48,7 +48,7 @@
         <button class="btn primary wide" id="unlock" type="button"><span class="nf"></span> Unlock</button>
         <p class="login-msg" id="login-msg">&nbsp;</p>
         <div class="enroll" id="enroll" hidden>
-          <p class="hint">Enroll this device with the one-time token from your secrets.</p>
+          <p class="hint" id="enroll-hint">Enroll this device: scan the QR code from <code>pasture-enroll</code>, or paste the one-time token.</p>
           <input id="enroll-token" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="enrollment token">
           <input id="enroll-label" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="32" placeholder="label (e.g. phone)">
           <button class="btn wide" id="enroll-go" type="button"><span class="nf"></span> Create passkey</button>

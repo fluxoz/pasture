@@ -43,6 +43,38 @@ let
   }) cfg.listenAddresses;
   boolStr = b: if b then "1" else "0";
 
+  # Prints the enrollment link as a QR code: scan it with the phone and tap
+  # "Create passkey". The token rides in the URL fragment, which browsers never
+  # send to the server (so it is not in any access log).
+  enrollCommand = pkgs.writeShellApplication {
+    name = "pasture-enroll";
+    runtimeInputs = [
+      pkgs.qrencode
+      pkgs.curl
+      pkgs.jq
+    ];
+    text = ''
+      token_file=${lib.escapeShellArg cfg.secrets.enrollTokenFile}
+      if ! token=$(cat -- "$token_file" 2>/dev/null) || [ "''${#token}" -lt 16 ]; then
+        echo "pasture-enroll: can't read a token from $token_file (run it as ${cfg.user})" >&2
+        exit 1
+      fi
+      if open=$(curl -fsS --max-time 3 http://127.0.0.1:${toString cfg.backendPort}/auth/info | jq -r .enroll); then
+        if [ "$open" != true ]; then
+          echo "pasture-enroll: enrollment is closed; this token was used already. Rotate it and redeploy." >&2
+          exit 1
+        fi
+      else
+        echo "pasture-enroll: the gateway is not answering; the code works once it runs" >&2
+      fi
+      url="https://${cfg.hostName}/enroll#t=$(jq -rn --arg t "$token" '$t | @uri')"
+      # Explicit black on white in a terminal; plain blocks when captured.
+      if [ -t 1 ]; then type=ANSIUTF8; else type=UTF8; fi
+      qrencode -t "$type" -m 2 -- "$url"
+      echo "Scan with the phone's camera, open the link, tap Create passkey. The code works once."
+    '';
+  };
+
   environment = lib.filterAttrs (_: v: v != null) (
     {
       PASTURE_HOST = cfg.hostName;
@@ -214,7 +246,11 @@ in
     enrollment.enable = mkOption {
       type = types.bool;
       default = false;
-      description = "Open /enroll so a new passkey can be registered with the enrollment token. Turn off afterwards.";
+      description = ''
+        Open /enroll so a new passkey can be registered with the enrollment token,
+        and give `user` the `pasture-enroll` command (shows the link as a QR code).
+        Turn off afterwards.
+      '';
     };
 
     session = {
@@ -477,7 +513,10 @@ in
       allowedTCPPorts = [ cfg.listenPort ];
     });
 
-    users.users.${cfg.user}.linger = mkIf cfg.linger true;
+    users.users.${cfg.user} = {
+      linger = mkIf cfg.linger true;
+      packages = mkIf cfg.enrollment.enable [ enrollCommand ];
+    };
 
     systemd.user.services.pasture = {
       description = "pasture gateway (passkey PWA terminal)";

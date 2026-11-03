@@ -531,7 +531,9 @@ class Gateway:
         if path in ("", "index.html"):
             return self.static.response(request, "index.html")
         if path == "enroll":
-            if not self.auth.enrollment_open():
+            # Served while enrollment is configured, even after the token is used,
+            # so a scanned link says "already used" instead of a bare 404.
+            if not self.cfg.enrollment:
                 raise web.HTTPNotFound()
             return self.static.response(request, "index.html")
         return self.static.response(request, path)

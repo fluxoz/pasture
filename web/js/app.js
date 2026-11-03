@@ -58,16 +58,38 @@ function explain(e) {
   return e?.message || String(e);
 }
 
+// The QR code from `pasture-enroll` opens /enroll#t=<token>. The fragment never
+// reaches the server; take the token and drop it from the address bar.
+const linkToken = (() => {
+  const t = new URLSearchParams(location.hash.slice(1)).get('t') || '';
+  if (location.hash) history.replaceState(null, '', location.pathname + location.search);
+  return t;
+})();
+
+const deviceName = () => (navigator.userAgent.match(/iPhone|iPad|Android|Macintosh|Windows|Linux/) || ['passkey'])[0];
+
+function useLinkToken() {
+  $('#enroll-token').value = linkToken;
+  $('#enroll-token').hidden = true;
+  if (!$('#enroll-label').value) $('#enroll-label').value = deviceName();
+  $('#enroll-hint').textContent = 'Enrollment code loaded from the QR code.';
+  $('#unlock').classList.remove('primary');
+  $('#enroll-go').classList.add('primary');
+  enroll.prefetch(linkToken).catch((e) => loginMessage(explain(e), true));
+}
+
 function showLogin(message = '') {
   closeSheet();
   setView('login');
   loginMessage(message);
   $('#enroll').hidden = !info.enroll;
+  if (linkToken && !info.enroll) loginMessage('Enrollment is closed; that code was used already', true);
   if (!webauthnSupported()) {
     loginMessage('This browser has no passkey support', true);
     return;
   }
   login.prefetch().catch((e) => loginMessage(explain(e), true));
+  if (linkToken && info.enroll) useLinkToken();
 }
 
 async function unlock() {
@@ -92,7 +114,10 @@ async function doEnroll() {
     await enroll.run(token, label);
     $('#enroll-token').value = '';
     info.enroll = false;
-    toast('Passkey enrolled. Move it into your credentials secret and turn enrollment off.', { ms: 8000 });
+    // Installing from here must not start the app at /enroll, which 404s once enrollment is off.
+    if (location.pathname !== '/') history.replaceState(null, '', '/');
+    const installed = matchMedia('(display-mode: standalone)').matches || navigator.standalone;
+    toast(installed ? 'Passkey created' : 'Passkey created. Install the app: Share → Add to Home Screen', { ms: 8000 });
     await enterApp();
   } catch (e) {
     loginMessage(explain(e), true);

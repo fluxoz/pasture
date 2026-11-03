@@ -106,15 +106,20 @@ class AppTest(TempDir, unittest.IsolatedAsyncioTestCase):
         r = await self.client.get("/api/state")
         self.assertEqual(r.status, 200)
 
-        # The enrollment page is gone once the token is used.
-        r = await self.client.get("/enroll")
-        self.assertEqual(r.status, 404)
-        r = await self.client.get("/auth/info")
-        self.assertFalse((await r.json())["enroll"])
-
-    async def test_enroll_page_while_open(self):
+        # Once the token is used the page stays (it explains), enrollment does not.
         r = await self.client.get("/enroll")
         self.assertEqual(r.status, 200)
+        r = await self.client.get("/auth/info")
+        self.assertFalse((await r.json())["enroll"])
+        r = await self.client.post("/auth/register/options", headers={**POST, "X-Enroll-Token": TOKEN})
+        self.assertEqual(r.status, 403)
+
+    async def test_enroll_page_only_while_enabled(self):
+        r = await self.client.get("/enroll")
+        self.assertEqual(r.status, 200)
+        self.cfg.enrollment = False
+        r = await self.client.get("/enroll")
+        self.assertEqual(r.status, 404)
 
     async def test_healthz_loopback_only(self):
         r = await self.client.get("/healthz")
