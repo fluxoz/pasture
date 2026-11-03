@@ -63,7 +63,9 @@ export class TermView {
     term.unicode.activeVersion = '11';
     term.loadAddon(new WebLinksAddon((_e, uri) => window.open(uri, '_blank', 'noopener,noreferrer')));
     term.open(this.host);
-    if (storage('renderer', 'webgl') === 'webgl') this.useWebgl();
+    // DOM rendering is the default: it is verified everywhere and plenty fast for a
+    // phone-sized grid. WebGL is opt-in from the terminal menu.
+    if (storage('renderer', 'dom') === 'webgl') this.useWebgl();
     term.onData((d) => this.send(enc.encode(this.hooks.transform(d))));
     term.onBinary((d) => this.send(Uint8Array.from(d, (c) => c.charCodeAt(0) & 0xff)));
     this.touch();

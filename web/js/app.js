@@ -253,9 +253,9 @@ function termMenu() {
         item({ icon: G.refresh, label: t.k === 'shell' ? 'New shell' : 'Reconnect', onSelect: () => term.reconnect() }),
         item({
           icon: G.term,
-          label: storage('renderer', 'webgl') === 'webgl' ? 'Use DOM renderer' : 'Use WebGL renderer',
+          label: storage('renderer', 'dom') === 'webgl' ? 'Use DOM renderer' : 'Use WebGL renderer',
           onSelect: () => {
-            store('renderer', storage('renderer', 'webgl') === 'webgl' ? 'dom' : 'webgl');
+            store('renderer', storage('renderer', 'dom') === 'webgl' ? 'dom' : 'webgl');
             openTerm(t);
           },
         }),

@@ -25,7 +25,8 @@ CDN, no push relay, no tunnel. Fonts and xterm.js are bundled at build time.
 - **Terminal**: xterm.js over a WebSocket to a PTY on the host. Targets are a
   fixed set: a login shell, `tmux new-session -A -s <name>`, `herdr agent
   attach <pane>`, or the full herdr TUI. Closing the terminal ends only the
-  attach client, never the tmux session or herdr pane.
+  attach client, never the tmux session or herdr pane. Rendering uses xterm's
+  DOM renderer; WebGL can be switched on per device from the terminal menu.
 - **Key bar**: Esc, Tab, sticky Ctrl/Alt (double-tap locks), arrows with
   auto-repeat, symbols, PgUp/PgDn, the multiplexer prefix, paste, hide keyboard.
   One-finger drag scrolls, pinch changes the font size.
