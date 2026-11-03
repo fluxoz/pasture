@@ -15,6 +15,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 from pathlib import Path
 
 from .. import validate
@@ -152,6 +153,37 @@ def pane_index(state: dict) -> dict[str, dict]:
     return out
 
 
+def transitions(session: str, before: dict[str, dict], after: dict[str, dict]) -> list[dict]:
+    """Alerts for agents that just became blocked or finished (not on a first snapshot)."""
+    if not before:
+        return []
+    out = []
+    for pane_id, pane in after.items():
+        old = before.get(pane_id)
+        status = pane.get("status")
+        if old is None or not pane.get("agent") or status not in ("blocked", "done") or old.get("status") == status:
+            continue
+        name = pane.get("name") or pane.get("display") or pane.get("agent")
+        project = pane.get("cwd") or None
+        out.append(
+            {
+                "id": f"herdr:{session}:{pane_id}:{pane.get('state_change_seq') or int(time.time())}",
+                "time": int(time.time()),
+                "title": f"{name} - {project}" if project else str(name),
+                "message": pane.get("title") or "",
+                "agent": name,
+                "project": project,
+                "kind": status,
+                "session": session,
+                "pane": pane_id,
+                "pushTitle": f"{name} needs you" if status == "blocked" else f"{name} is done",
+                "pushBody": " · ".join(x for x in (project, pane.get("title")) if x)[:180],
+                "url": f"/#go=agent:{session}:{pane_id}",
+            }
+        )
+    return out
+
+
 class HerdrSession:
     SAFETY_POLL = 10.0
 
@@ -185,8 +217,10 @@ class HerdrSession:
             result = await self.call("session.snapshot")
             snap = result.get("snapshot") or {}
             self.state = normalize(snap)
-            self.panes = pane_index(self.state)
+            before, self.panes = self.panes, pane_index(self.state)
             self.running = True
+        for item in transitions(self.name, before, self.panes):
+            self.provider.hub.alert(item)
         self.provider.hub.changed()
 
     def _schedule_refresh(self) -> None:
@@ -370,6 +404,10 @@ class HerdrProvider:
             self._task.cancel()
         for session in self.sessions.values():
             session.stop()
+
+    def waiting(self) -> int:
+        """Agents that need you, across sessions (the app icon badge)."""
+        return sum(1 for sess in self.sessions.values() for p in sess.panes.values() if p.get("status") == "blocked")
 
     def state(self) -> dict:
         names = sorted(self.sessions, key=lambda n: (n != self.default_name, n))

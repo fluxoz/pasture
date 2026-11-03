@@ -1,6 +1,6 @@
 // pasture service worker. The build replaces @VERSION@ (a hash of the whole
 // bundle) and @PRECACHE@ (every static file), so each build gets a new cache.
-// /api, /auth, /ws and /enroll are never cached.
+// /api, /auth, /ws and /enroll are never cached. It also shows Web Push alerts.
 
 const VERSION = '@VERSION@';
 const CACHE = `pasture-${VERSION}`;
@@ -22,6 +22,47 @@ self.addEventListener('activate', (event) => {
 
 self.addEventListener('message', (event) => {
   if (event.data === 'skip-waiting') self.skipWaiting();
+});
+
+// A push is an alert from the gateway: show it (iOS requires every push to
+// show something) and badge the app icon with the agents waiting.
+self.addEventListener('push', (event) => {
+  let msg = {};
+  try {
+    msg = event.data ? event.data.json() : {};
+  } catch {
+    msg = { body: event.data?.text() };
+  }
+  const shown = self.registration.showNotification(msg.title || 'pasture', {
+    body: msg.body || '',
+    tag: msg.tag,
+    data: { url: msg.url || '/' },
+    icon: '/icons/icon-192.png',
+  });
+  const nav = self.navigator;
+  const badge =
+    typeof msg.badge === 'number' && nav.setAppBadge
+      ? (msg.badge ? nav.setAppBadge(msg.badge) : nav.clearAppBadge()).catch(() => {})
+      : null;
+  event.waitUntil(Promise.all([shown, badge]));
+});
+
+// Tapping an alert opens the app on that agent (focusing it if it is open).
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const url = new URL(event.notification.data?.url || '/', self.location.origin).href;
+  event.waitUntil(
+    (async () => {
+      const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+      const open = windows.find((w) => new URL(w.url).origin === self.location.origin);
+      if (open) {
+        await open.focus();
+        open.postMessage({ type: 'open', url });
+      } else {
+        await self.clients.openWindow(url);
+      }
+    })(),
+  );
 });
 
 self.addEventListener('fetch', (event) => {

@@ -152,7 +152,9 @@ export class KeyBar {
         this.button(glyph(G.kbdHide), { aria: 'hide keyboard', click: () => this.hooks.blur() }),
       ),
     );
-    this.end?.replaceChildren(...[this.micBtn].filter(Boolean));
+    // Enter stays in reach next to the mic, whatever the keys are scrolled to.
+    const enter = k(glyph(G.enter), '\r', { cls: 'key enter', aria: 'enter' });
+    this.end?.replaceChildren(group(enter), ...[this.micBtn].filter(Boolean));
     this.paintMods();
     // Fade whichever edge has more keys behind it.
     const fade = () => {

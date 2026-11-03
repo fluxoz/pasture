@@ -20,6 +20,7 @@ class Hub:
     def __init__(self, debounce: float = 0.05):
         self.debounce = debounce
         self._subscribers: set[asyncio.Queue] = set()
+        self.alert_listeners: list[Callable[[dict], None]] = []
         self._sources: dict[str, Callable[[], Any]] = {}
         self._pending: asyncio.TimerHandle | None = None
         self._last: str = ""
@@ -56,6 +57,11 @@ class Hub:
 
     def alert(self, item: dict) -> None:
         self._broadcast("alert", json.dumps(item, separators=(",", ":")))
+        for listener in self.alert_listeners:
+            try:
+                listener(item)
+            except Exception:
+                log.exception("alert listener failed")
 
     def _broadcast(self, event: str, data: str) -> None:
         for queue in list(self._subscribers):

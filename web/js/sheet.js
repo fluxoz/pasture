@@ -99,7 +99,7 @@ export function tile({ icon, label, onSelect, close = true }) {
 export const section = (title, ...rows) =>
   el('section', { class: 'sheet-section' }, el('h3', { text: title }), el('div', { class: 'group' }, ...rows.filter(Boolean)));
 
-/** A setting with a switch; the sheet stays open. */
+/** A setting with a switch; the sheet stays open. If onChange rejects, it flips back. */
 export function toggle({ icon, label, value, onChange }) {
   let on = !!value;
   const row = el(
@@ -109,14 +109,22 @@ export function toggle({ icon, label, value, onChange }) {
     el('span', { class: 'label', text: label }),
     el('span', { class: 'switch', 'aria-hidden': 'true' }),
   );
+  const paint = () => row.setAttribute('aria-checked', String(on));
   row.addEventListener('click', () => {
     on = !on;
-    row.setAttribute('aria-checked', String(on));
+    paint();
     vibrate(6);
-    onChange(on);
+    const result = onChange(on);
+    result?.catch?.(() => {
+      on = !on;
+      paint();
+    });
   });
   return row;
 }
+
+/** A line of explanation inside a section. */
+export const note = (text) => el('p', { class: 'setting note', text });
 
 /** A setting with a segmented choice. options: [[value, label], ...] */
 export function choice({ icon, label, options, value, onChange }) {

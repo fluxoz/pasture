@@ -25,6 +25,7 @@ from .providers.herdr import HerdrProvider
 from .providers.shell import ShellProvider
 from .providers.tmux import TmuxProvider
 from .pty_bridge import MAX_PTYS_PER_SESSION, Bridge, Pty, clamp_size
+from .push import Push, PushError
 from .sessions import Session, SessionStore
 
 log = logging.getLogger("pasture")
@@ -103,15 +104,16 @@ class Static:
 
 
 def remote_addr(request: web.Request) -> str:
-    """The client address: nginx's X-Real-IP when the peer is loopback."""
+    """The client address: the proxy's X-Real-IP (nginx) or X-Forwarded-For (tailscale
+    serve) when the peer is loopback; only a local proxy can set them."""
     peer = request.remote or ""
     try:
         loopback = ipaddress.ip_address(peer).is_loopback
     except ValueError:
         loopback = False
     if loopback:
-        real = request.headers.get("X-Real-IP")
-        if real:
+        real = request.headers.get("X-Real-IP") or (request.headers.get("X-Forwarded-For") or "").split(",")[-1]
+        if real.strip():
             return real.strip()
     return peer
 
@@ -155,6 +157,11 @@ class Gateway:
         for provider in (self.shell, self.tmux, self.herdr, self.alerts):
             if provider is not None:
                 self.hub.register(provider.name, provider.state)
+        self.push = (
+            Push(cfg, badge=lambda: self.herdr.waiting() if self.herdr else None, valid=self.auth.known) if cfg.push else None
+        )
+        if self.push is not None:
+            self.hub.alert_listeners.append(self.push.notify)
 
     # -- plumbing --------------------------------------------------------
 
@@ -168,6 +175,7 @@ class Gateway:
                 "alerts": self.alerts is not None,
             },
             "dictation": self.dictation is not None,
+            "push": {"key": self.push.vapid.public} if self.push else None,
             "projectRoots": [str(p) for p in self.cfg.project_roots],
             "home": str(Path.home()),
             "idleMinutes": self.cfg.idle_minutes,
@@ -439,6 +447,55 @@ class Gateway:
         log.info("action %s (passkey %s…)", op, session.cred_id[:8])
         return web.json_response(result)
 
+    # -- push ----------------------------------------------------------------
+
+    async def push_body(self, request: web.Request) -> tuple[Session, dict, str]:
+        session = self.require(request)
+        self.check_csrf(request)
+        if self.push is None:
+            raise web.HTTPNotFound(text=json.dumps({"error": "push is off"}), content_type="application/json")
+        try:
+            body = await request.json()
+            device = validate.device(body.get("device"))
+        except (ValueError, AttributeError, validate.Invalid) as e:
+            raise web.HTTPBadRequest(text=json.dumps({"error": str(e) or "bad request"}), content_type="application/json")
+        return session, body, device
+
+    async def api_push_subscribe(self, request: web.Request) -> web.Response:
+        session, body, device = await self.push_body(request)
+        kinds = body.get("kinds") if isinstance(body.get("kinds"), list) else ["blocked", "done"]
+        try:
+            self.push.subscribe(body.get("subscription") or {}, device, session.cred_id, [str(k) for k in kinds])
+        except PushError as e:
+            return json_error(e.status, str(e))
+        return web.json_response({"ok": True})
+
+    async def api_push_unsubscribe(self, request: web.Request) -> web.Response:
+        _, _, device = await self.push_body(request)
+        self.push.unsubscribe(device)
+        return web.json_response({"ok": True})
+
+    async def api_push_test(self, request: web.Request) -> web.Response:
+        _, _, device = await self.push_body(request)
+        try:
+            await self.push.test(device)
+        except PushError as e:
+            return json_error(e.status, str(e))
+        return web.json_response({"ok": True})
+
+    async def api_presence(self, request: web.Request) -> web.Response:
+        # No touch: an app left open in front must still time out.
+        self.require(request, touch=False)
+        self.check_csrf(request)
+        try:
+            body = await request.json()
+            device = validate.device(body.get("device"))
+        except (ValueError, AttributeError, validate.Invalid):
+            return json_error(400, "bad request")
+        if self.push is not None:
+            self.push.seen(device, bool(body.get("visible")))
+        return web.json_response({"ok": True})
+
     async def api_dictate(self, request: web.Request) -> web.Response:
         self.require(request)
         self.check_csrf(request)
@@ -572,6 +629,8 @@ class Gateway:
                 await provider.stop()
         if self.dictation is not None:
             await self.dictation.close()
+        if self.push is not None:
+            await self.push.close()
 
     def app(self) -> web.Application:
         app = web.Application(middlewares=[self.headers_mw], client_max_size=2 * 1024 * 1024 + 1024)
@@ -589,6 +648,10 @@ class Gateway:
         r.add_get("/api/preview", self.api_preview)
         r.add_post("/api/action", self.api_action)
         r.add_post("/api/dictate", self.api_dictate)
+        r.add_post("/api/push/subscribe", self.api_push_subscribe)
+        r.add_post("/api/push/unsubscribe", self.api_push_unsubscribe)
+        r.add_post("/api/push/test", self.api_push_test)
+        r.add_post("/api/presence", self.api_presence)
         r.add_get("/ws/term", self.ws_term)
         r.add_get("/ws/dictate", self.ws_dictate)
         r.add_get("/{path:.*}", self.static_handler)

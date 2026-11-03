@@ -49,6 +49,16 @@ def herdr_session(value) -> str:
     return value
 
 
+DEVICE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
+
+
+def device(value) -> str:
+    """A device id the app makes up and keeps in localStorage."""
+    if not isinstance(value, str) or not DEVICE.match(value):
+        raise Invalid("bad device id")
+    return value
+
+
 def label(value, limit: int = 64) -> str:
     if not isinstance(value, str):
         raise Invalid("name must be a string")

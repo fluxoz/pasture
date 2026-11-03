@@ -143,6 +143,9 @@ class Auth:
                     creds.append(item)
         return creds
 
+    def known(self, cred_id: str) -> bool:
+        return self._find(cred_id) is not None
+
     def _find(self, cred_id: str) -> dict | None:
         for cred in self.credentials():
             if hmac.compare_digest(cred["id"], cred_id):

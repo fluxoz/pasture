@@ -118,6 +118,12 @@ let
       PASTURE_DICTATE_IDLE_MINUTES = toString cfg.dictation.idleMinutes;
       PASTURE_DICTATE_ARGS = builtins.toJSON cfg.dictation.extraArgs;
     }
+    // {
+      PASTURE_PUSH = boolStr cfg.push.enable;
+    }
+    // lib.optionalAttrs (cfg.push.subject != null) {
+      PASTURE_PUSH_SUBJECT = cfg.push.subject;
+    }
     // lib.optionalAttrs (cfg.dictation.enable && cfg.dictation.prompt != null) {
       PASTURE_DICTATE_PROMPT = cfg.dictation.prompt;
     }
@@ -369,6 +375,25 @@ in
       topic = mkOption {
         type = types.str;
         default = "agents";
+      };
+    };
+
+    push = {
+      enable = mkOption {
+        type = types.bool;
+        default = true;
+        description = ''
+          Web Push: devices that turn notifications on (in the app's menu) get
+          agent alerts while the app is closed. Pushes go to the device's push
+          service (Apple's for an iPhone), end-to-end encrypted. Nothing is sent
+          until a device subscribes.
+        '';
+      };
+      subject = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        example = "mailto:you@example.com";
+        description = "VAPID contact the push service may use. Default: https://<hostName>.";
       };
     };
 

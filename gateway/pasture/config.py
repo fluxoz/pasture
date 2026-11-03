@@ -103,6 +103,8 @@ class Config:
     dictate_idle_minutes: float = 0.0  # stop the model after this long unused; 0 = keep it loaded
     dictate_prompt: str = ""
     dictate_args: list[str] = field(default_factory=list)
+    push: bool = True  # Web Push to devices that turn it on
+    push_subject: str | None = None  # VAPID contact; default https://<host>
 
     cert_file: Path | None = None
 
@@ -188,6 +190,8 @@ def load() -> Config:
         dictate_idle_minutes=_float("PASTURE_DICTATE_IDLE_MINUTES", 0.0),
         dictate_prompt=_env("PASTURE_DICTATE_PROMPT", "") or "",
         dictate_args=dictate_args,
+        push=_bool("PASTURE_PUSH", True),
+        push_subject=_env("PASTURE_PUSH_SUBJECT"),
         cert_file=_path("PASTURE_CERT_FILE"),
     )
     # systemd's StateDirectory=/RuntimeDirectory= export these.

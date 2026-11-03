@@ -7,7 +7,8 @@ import { Dashboard } from './dashboard.js';
 import { TermView } from './term.js';
 import { KeyBar } from './keys.js';
 import { Recorder, primeAudio } from './dictate.js';
-import { openSheet, closeSheet, item, items, tiles, tile, section, toggle, choice, stepper } from './sheet.js';
+import { pushSupport, currentSubscription, enablePush, disablePush, testPush, pushKinds, updatePushKinds, trackPresence } from './push.js';
+import { openSheet, closeSheet, item, items, tiles, tile, section, toggle, choice, stepper, note } from './sheet.js';
 import { $, el, G, toast, storage, store, vibrate } from './util.js';
 
 const app = $('#app');
@@ -60,11 +61,11 @@ function explain(e) {
 
 // The QR code from `pasture-enroll` opens /enroll#t=<token>. The fragment never
 // reaches the server; take the token and drop it from the address bar.
-const linkToken = (() => {
-  const t = new URLSearchParams(location.hash.slice(1)).get('t') || '';
-  if (location.hash) history.replaceState(null, '', location.pathname + location.search);
-  return t;
-})();
+const link = new URLSearchParams(location.hash.slice(1));
+const linkToken = link.get('t') || '';
+// A notification opens /#go=agent:<session>:<pane>: that agent, once logged in.
+let linkGo = link.get('go') || '';
+if (location.hash) history.replaceState(null, '', location.pathname + location.search);
 
 const deviceName = () => (navigator.userAgent.match(/iPhone|iPad|Android|Macintosh|Windows|Linux/) || ['passkey'])[0];
 
@@ -148,6 +149,15 @@ async function enterApp() {
   dash.setConfig(config);
   dash.update(data.state);
   events.start();
+  if (config.push && !presenceOn) {
+    presenceOn = true;
+    trackPresence();
+  }
+  if (linkGo) {
+    const go = linkGo;
+    linkGo = '';
+    if (openGo(go)) return;
+  }
   if (term) {
     setView('term');
     closeSheet();
@@ -157,10 +167,27 @@ async function enterApp() {
   }
 }
 
+let presenceOn = false;
+
+/** Open what a notification points at; false if it is gone. */
+function openGo(go) {
+  const [kind, session, ...rest] = go.split(':');
+  const pane = rest.join(':'); // pane ids contain colons
+  if (kind !== 'agent' || !session || !pane) return false;
+  const found = dash.findPane(session, pane);
+  if (!found) {
+    toast('That agent is gone');
+    return false;
+  }
+  const p = found.p;
+  openTerm({ k: 'agent', t: p.id, s: session, title: p.name || p.display || p.agent, pane: p.id });
+  return true;
+}
+
 function showOffline() {
   setView('login');
   $('#enroll').hidden = true;
-  loginMessage(`Can't reach ${location.host}. Retrying…`, true);
+  loginMessage("Can't reach the server. Retrying…", true);
   clearTimeout(offlineTimer);
   offlineTimer = setTimeout(() => boot(false), 5000);
 }
@@ -330,11 +357,51 @@ function termMenu() {
   });
 }
 
-function dashMenu() {
+async function dashMenu() {
+  const support = config?.push ? pushSupport() : null;
+  const sub = support?.ok ? await currentSubscription().catch(() => null) : null;
+  const on = !!sub && Notification.permission === 'granted';
+  const kinds = pushKinds();
+  const setKind = (kind, want) => {
+    const next = want ? [...new Set([...pushKinds(), kind])] : pushKinds().filter((k) => k !== kind);
+    return updatePushKinds(next).catch((e) => {
+      toast(explain(e), { error: true });
+      throw e;
+    });
+  };
   openSheet({
     title: config?.appName || 'pasture',
-    sub: location.host,
     body: [
+      support &&
+        section(
+          'Notifications',
+          support.ok
+            ? toggle({
+                icon: G.bell,
+                label: 'Push notifications',
+                value: on,
+                onChange: (want) =>
+                  (want ? enablePush(config.push.key) : disablePush())
+                    .then(() => toast(want ? 'Notifications on' : 'Notifications off'))
+                    .catch((e) => {
+                      toast(explain(e), { error: true });
+                      throw e;
+                    }),
+              })
+            : note(support.why),
+          support.ok && toggle({ icon: G.warn, label: 'When an agent needs you', value: kinds.includes('blocked'), onChange: (v) => setKind('blocked', v) }),
+          support.ok && toggle({ icon: G.check, label: 'When an agent finishes', value: kinds.includes('done'), onChange: (v) => setKind('done', v) }),
+          support.ok &&
+            item({
+              icon: G.send,
+              label: 'Send a test',
+              close: false,
+              onSelect: () =>
+                testPush()
+                  .then(() => toast('Sent. Lock the phone to see it.'))
+                  .catch((e) => toast(explain(e), { error: true })),
+            }),
+        ),
       items(
         item({ icon: G.refresh, label: 'Reload app', onSelect: () => location.reload() }),
         item({
@@ -484,6 +551,14 @@ const termSink = {
 function registerServiceWorker() {
   if (!('serviceWorker' in navigator)) return;
   let reloading = false;
+  // A tapped notification while the app is open.
+  navigator.serviceWorker.addEventListener('message', (e) => {
+    if (e.data?.type !== 'open') return;
+    const go = new URLSearchParams(new URL(e.data.url).hash.slice(1)).get('go');
+    if (!go) return;
+    if (config && app.dataset.view !== 'login') openGo(go);
+    else linkGo = go;
+  });
   navigator.serviceWorker.addEventListener('controllerchange', () => {
     if (reloading) location.reload();
   });
@@ -565,7 +640,8 @@ function wire() {
       updateBadges(state);
     },
     onAlert: (a) => {
-      if (app.dataset.view === 'dash' && a.kind === 'blocked') toast(`${a.title}: needs you`);
+      const text = a.pushTitle || (a.kind === 'blocked' ? `${a.title}: needs you` : '');
+      if (app.dataset.view === 'dash' && text) toast(text);
     },
     onAuth: onExpired,
     onConn: setConn,

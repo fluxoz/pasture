@@ -7,8 +7,8 @@ export class ApiError extends Error {
   }
 }
 
-export async function api(path, { method = 'GET', body, headers = {} } = {}) {
-  const opts = { method, headers: { ...headers }, credentials: 'same-origin', cache: 'no-store' };
+export async function api(path, { method = 'GET', body, headers = {}, keepalive = false } = {}) {
+  const opts = { method, headers: { ...headers }, credentials: 'same-origin', cache: 'no-store', keepalive };
   if (method !== 'GET') opts.headers['X-Pasture'] = '1';
   if (body instanceof Blob) {
     opts.body = body;
