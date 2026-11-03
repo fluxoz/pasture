@@ -1,11 +1,12 @@
 # services.pasture: the NixOS module.
 #
-# nginx terminates TLS on the listen addresses you give it and proxies to the
+# `tailscale serve` (default) or nginx (your own certificate, on the listen
+# addresses you give it) terminates TLS on the tailnet and proxies to the
 # gateway on 127.0.0.1. The gateway runs as a systemd *user* unit for
 # `services.pasture.user`, so terminals are that user's shells and it can reach
 # per-user sockets (herdr, tmux). Authentication (passkeys) happens in the
-# gateway, not in nginx. Nothing here has a host-specific default: user, host
-# name, addresses, certificate and secrets must all be set.
+# gateway. Nothing here has a host-specific default: user and host name must
+# be set; secrets are optional (the gateway can keep its own).
 self:
 {
   config,
@@ -29,6 +30,7 @@ let
 
   gateway = pkgs.callPackage ./gateway.nix { };
   herdrOn = cfg.herdr.package != null;
+  nginxOn = cfg.frontend == "nginx";
   herdrMethods = pkgs.callPackage ./herdr-methods.nix { herdr = cfg.herdr.package; };
   wildcard = [
     "0.0.0.0"
@@ -43,37 +45,20 @@ let
   }) cfg.listenAddresses;
   boolStr = b: if b then "1" else "0";
 
-  # Prints the enrollment link as a QR code: scan it with the phone and tap
-  # "Create passkey". The token rides in the URL fragment, which browsers never
-  # send to the server (so it is not in any access log).
-  enrollCommand = pkgs.writeShellApplication {
-    name = "pasture-enroll";
-    runtimeInputs = [
-      pkgs.qrencode
-      pkgs.curl
-      pkgs.jq
-    ];
-    text = ''
-      token_file=${lib.escapeShellArg cfg.secrets.enrollTokenFile}
-      if ! token=$(cat -- "$token_file" 2>/dev/null) || [ "''${#token}" -lt 16 ]; then
-        echo "pasture-enroll: can't read a token from $token_file (run it as ${cfg.user})" >&2
-        exit 1
-      fi
-      if open=$(curl -fsS --max-time 3 http://127.0.0.1:${toString cfg.backendPort}/auth/info | jq -r .enroll); then
-        if [ "$open" != true ]; then
-          echo "pasture-enroll: enrollment is closed; this token was used already. Rotate it and redeploy." >&2
-          exit 1
-        fi
-      else
-        echo "pasture-enroll: the gateway is not answering; the code works once it runs" >&2
-      fi
-      url="https://${cfg.hostName}/enroll#t=$(jq -rn --arg t "$token" '$t | @uri')"
-      # Explicit black on white in a terminal; plain blocks when captured.
-      if [ -t 1 ]; then type=ANSIUTF8; else type=UTF8; fi
-      qrencode -t "$type" -m 2 -- "$url"
-      echo "Scan with the phone's camera, open the link, tap Create passkey. The code works once."
-    '';
+  # `pasture-enroll`: the enrollment link as a QR code, for the phone's camera.
+  # The token rides in the URL fragment, which browsers never send to a server.
+  # A token the gateway manages is renewed once used; one from your secrets is
+  # only shown.
+  cli = pkgs.callPackage ./pasture.nix {
+    inherit gateway;
+    web = cfg.webPackage;
   };
+  enrollCommand = pkgs.writeShellScriptBin "pasture-enroll" ''
+    export PASTURE_HOST=${lib.escapeShellArg cfg.hostName}
+    export PASTURE_PORT=${toString cfg.backendPort}
+    ${optionalString (cfg.secrets.enrollTokenFile != null) "export PASTURE_ENROLL_TOKEN_FILE=${lib.escapeShellArg cfg.secrets.enrollTokenFile}"}
+    exec ${lib.getExe cli} enroll "$@"
+  '';
 
   environment = lib.filterAttrs (_: v: v != null) (
     {
@@ -163,18 +148,38 @@ in
       description = "Enable lingering for `user`, so the gateway runs without a login session.";
     };
 
+    frontend = mkOption {
+      type = types.enum [
+        "tailscale"
+        "nginx"
+      ];
+      default = "tailscale";
+      description = ''
+        What serves HTTPS on the tailnet.
+
+        `tailscale`: `tailscale serve` with the node's own ts.net certificate
+        (publicly trusted, nothing to install on the phone). Needs
+        `services.tailscale.enable` and HTTPS certificates turned on for the
+        tailnet; the host name then appears in Certificate Transparency logs.
+
+        `nginx`: nginx on `listenAddresses` with your own certificate
+        (`tls.*`), e.g. from a private CA, for a name that is never logged.
+      '';
+    };
     hostName = mkOption {
       type = types.str;
       example = "host.example.ts.net";
       description = ''
-        DNS name the phone uses: nginx `server_name`, the WebAuthn RP ID and the origin host.
+        DNS name the phone uses: the WebAuthn RP ID and the origin host (with
+        `frontend = "tailscale"`, this node's MagicDNS name).
         Passkeys are bound to it for good; changing it means enrolling again.
       '';
     };
     listenAddresses = mkOption {
       type = types.listOf types.str;
+      default = [ ];
       example = [ "100.64.0.10" ];
-      description = "Addresses nginx listens on (IPv6 in brackets). Wildcards need `allowWildcardListen`.";
+      description = "nginx frontend: addresses it listens on (IPv6 in brackets). Wildcards need `allowWildcardListen`.";
     };
     allowWildcardListen = mkOption {
       type = types.bool;
@@ -236,27 +241,34 @@ in
       };
     };
 
+    # All optional: without them the gateway keeps a session key and a one-time
+    # enrollment token in its state dir, and the passkeys enrolled with it.
     secrets = {
       sessionKeyFile = mkOption {
-        type = types.str;
+        type = types.nullOr types.str;
+        default = null;
         description = "Runtime path of a random key (32+ bytes) that signs session cookies. Readable by `user`.";
       };
       enrollTokenFile = mkOption {
-        type = types.str;
+        type = types.nullOr types.str;
+        default = null;
         description = "Runtime path of the one-time enrollment token (16+ characters). Readable by `user`.";
       };
       credentialsFile = mkOption {
-        type = types.str;
+        type = types.nullOr types.str;
+        default = null;
         description = ''
-          Runtime path of the passkey allowlist: a JSON list of credentials as the
-          gateway logs them at enrollment ("[]" before the first one). Readable by `user`.
+          Runtime path of a passkey allowlist: a JSON list of credentials as the
+          gateway logs them at enrollment. With it (and enrollment off) only these
+          passkeys work, from your secrets manager. Readable by `user`.
         '';
       };
     };
 
     enrollment.enable = mkOption {
       type = types.bool;
-      default = false;
+      default = cfg.secrets.credentialsFile == null;
+      defaultText = literalExpression "config.services.pasture.secrets.credentialsFile == null";
       description = ''
         Open /enroll so a new passkey can be registered with the enrollment token,
         and give `user` the `pasture-enroll` command (shows the link as a QR code).
@@ -495,16 +507,20 @@ in
         message = "services.pasture.hostName must be a domain name (WebAuthn does not accept bare host names or IPs).";
       }
       {
-        assertion = cfg.listenAddresses != [ ];
-        message = "services.pasture.listenAddresses must not be empty.";
+        assertion = !nginxOn || cfg.listenAddresses != [ ];
+        message = "services.pasture.listenAddresses must not be empty with frontend = \"nginx\".";
       }
       {
         assertion = cfg.allowWildcardListen || !(lib.any (a: lib.elem a wildcard) cfg.listenAddresses);
         message = "services.pasture.listenAddresses contains a wildcard; set allowWildcardListen = true if that is intended.";
       }
       {
-        assertion = cfg.tls.acmeHost != null || (cfg.tls.certFile != null && cfg.tls.keyFile != null);
-        message = "services.pasture needs tls.certFile and tls.keyFile, or tls.acmeHost.";
+        assertion = !nginxOn || cfg.tls.acmeHost != null || (cfg.tls.certFile != null && cfg.tls.keyFile != null);
+        message = "services.pasture needs tls.certFile and tls.keyFile, or tls.acmeHost, with frontend = \"nginx\".";
+      }
+      {
+        assertion = nginxOn || config.services.tailscale.enable;
+        message = "services.pasture.frontend = \"tailscale\" needs services.tailscale.enable = true.";
       }
       {
         assertion = !cfg.dictation.enable || cfg.dictation.model != null;
@@ -516,7 +532,7 @@ in
       }
     ];
 
-    services.nginx = {
+    services.nginx = mkIf nginxOn {
       enable = true;
       recommendedTlsSettings = mkDefault true;
       recommendedOptimisation = mkDefault true;
@@ -556,17 +572,36 @@ in
       };
     };
 
-    systemd.services.nginx = mkIf (cfg.nginx.after != [ ]) {
+    # `tailscale serve` keeps its config in tailscaled; this sets it at boot and
+    # removes it when the unit stops (pasture disabled or switched to nginx).
+    systemd.services.pasture-tailscale-serve = mkIf (!nginxOn) {
+      description = "Serve pasture on the tailnet (tailscale serve)";
+      after = [ "tailscaled.service" ];
+      wants = [ "tailscaled.service" ];
+      wantedBy = [ "multi-user.target" ];
+      path = [ config.services.tailscale.package ];
+      serviceConfig = {
+        Type = "oneshot";
+        RemainAfterExit = true;
+      };
+      script = ''
+        for _ in $(seq 60); do tailscale status --json >/dev/null 2>&1 && break; sleep 1; done
+        tailscale serve --bg --yes --https=${toString cfg.listenPort} http://127.0.0.1:${toString cfg.backendPort}
+      '';
+      preStop = "tailscale serve --https=${toString cfg.listenPort} off || true";
+    };
+
+    systemd.services.nginx = mkIf (nginxOn && cfg.nginx.after != [ ]) {
       after = cfg.nginx.after;
       wants = cfg.nginx.after;
     };
 
-    boot.kernel.sysctl = mkIf cfg.nonlocalBind {
+    boot.kernel.sysctl = mkIf (nginxOn && cfg.nonlocalBind) {
       "net.ipv4.ip_nonlocal_bind" = 1;
       "net.ipv6.ip_nonlocal_bind" = 1;
     };
 
-    networking.firewall.interfaces = lib.genAttrs cfg.firewall.interfaces (_: {
+    networking.firewall.interfaces = lib.genAttrs (lib.optionals nginxOn cfg.firewall.interfaces) (_: {
       allowedTCPPorts = [ cfg.listenPort ];
     });
 

@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import pwd
+import secrets
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -201,9 +202,31 @@ def load() -> Config:
     runtime = _path("PASTURE_RUNTIME_DIR") or _path("RUNTIME_DIRECTORY")
     if runtime:
         cfg.runtime_dir = runtime
+    # Without secret paths the gateway keeps its own in the state dir: a session
+    # key, and a one-time enrollment token that `pasture enroll` shows and renews.
+    if cfg.session_key_file is None:
+        cfg.session_key_file = ensure_secret(cfg.state_dir / "session-key", lambda: secrets.token_bytes(48))
+    if cfg.enroll_token_file is None:
+        cfg.enroll_token_file = ensure_secret(cfg.state_dir / "enroll-token", new_token)
     if cfg.dictate and not (cfg.whisper and cfg.whisper_model):
         raise ConfigError("dictation needs PASTURE_DICTATE_SERVER (whisper-server) and PASTURE_DICTATE_MODEL")
     return cfg
+
+
+def new_token() -> bytes:
+    return secrets.token_urlsafe(32).encode()
+
+
+def ensure_secret(path: Path, make) -> Path:
+    """Create a private file with make()'s bytes unless it exists. Returns the path."""
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        return path
+    with os.fdopen(fd, "wb") as f:
+        f.write(make())
+    return path
 
 
 def read_secret(path: Path | None) -> bytes:

@@ -17,14 +17,33 @@
       # mkWeb pkgs { theme ? <palette attrs>; fonts ? { family; regular; bold; }; iconFont; appName; shortName; }
       lib.mkWeb = pkgs: args: pkgs.callPackage ./nix/web.nix args;
 
-      packages = forAllSystems (pkgs: {
-        gateway = pkgs.callPackage ./nix/gateway.nix { };
-        web = self.lib.mkWeb pkgs { };
-        default = self.packages.${pkgs.stdenv.hostPlatform.system}.gateway;
-      });
+      packages = forAllSystems (
+        pkgs:
+        let
+          own = self.packages.${pkgs.stdenv.hostPlatform.system};
+        in
+        {
+          gateway = pkgs.callPackage ./nix/gateway.nix { };
+          web = self.lib.mkWeb pkgs { };
+          # `nix run github:fluxoz/pasture`: any Linux machine on a tailnet.
+          pasture = pkgs.callPackage ./nix/pasture.nix { inherit (own) gateway web; };
+          # The same with whisper.cpp (CPU) and the base.en model for the mic button.
+          pasture-dictation = own.pasture.override {
+            dictationServer = pkgs.whisper-cpp;
+            dictationModel = pkgs.fetchurl {
+              name = "ggml-base.en-q8_0.bin";
+              url = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en-q8_0.bin";
+              hash = "sha256-pNSgdoB14Tz9fhnfOuLbxKaNN9Nqfa1F6EEMmjT4yH4=";
+            };
+          };
+          default = own.pasture;
+        }
+      );
 
       nixosModules.pasture = import ./nix/module.nix self;
       nixosModules.default = self.nixosModules.pasture;
+      homeManagerModules.pasture = import ./nix/hm-module.nix self;
+      homeManagerModules.default = self.homeManagerModules.pasture;
 
       # `nix develop`: Python with the gateway's dependencies, for running the
       # tests and a local gateway (see README "Development").
