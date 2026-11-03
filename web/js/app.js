@@ -1,0 +1,426 @@
+// pasture: boot, views (login / dashboard / terminal), live events, menus.
+
+import { api, Events } from './api.js';
+import { Login, Enroll, logout, webauthnSupported } from './auth.js';
+import { initViewport, onViewport } from './viewport.js';
+import { Dashboard } from './dashboard.js';
+import { TermView } from './term.js';
+import { KeyBar } from './keys.js';
+import { Recorder } from './dictate.js';
+import { openSheet, closeSheet, item, items } from './sheet.js';
+import { $, el, G, toast, storage, store } from './util.js';
+
+const app = $('#app');
+const login = new Login();
+const enroll = new Enroll();
+const recorder = new Recorder();
+let info = { enroll: false };
+let config = null;
+let dash = null;
+let events = null;
+let term = null;
+let keybar = null;
+let target = null;
+let offlineTimer = 0;
+
+// -- views ----------------------------------------------------------------
+
+function setView(view) {
+  app.dataset.view = view;
+  const p = config?.providers || {};
+  const onDash = view === 'dash';
+  $('#act-herdr').hidden = !(onDash && p.herdr);
+  $('#act-tmux').hidden = !(onDash && p.tmux && dash?.state.tmux?.default);
+  $('#act-inbox').hidden = !(onDash && p.alerts);
+  $('#act-new').hidden = !onDash;
+  $('#act-menu').hidden = !(onDash || view === 'term');
+  $('#term-status').hidden = view !== 'term';
+  if (view !== 'term') $('#title').textContent = config?.appName || document.title;
+  if (onDash) dash?.pumpPreviews();
+}
+
+function setConn(state) {
+  $('#conn').className = `conn ${state}`;
+}
+
+// -- login and enrollment -------------------------------------------------
+
+function loginMessage(text, error = false) {
+  const m = $('#login-msg');
+  m.textContent = text || ' ';
+  m.classList.toggle('error', error);
+}
+
+function explain(e) {
+  if (e?.name === 'NotAllowedError') return 'Cancelled';
+  if (e?.name === 'InvalidStateError') return 'This passkey is already enrolled';
+  if (e?.status === 0) return 'Server unreachable';
+  return e?.message || String(e);
+}
+
+function showLogin(message = '') {
+  closeSheet();
+  setView('login');
+  loginMessage(message);
+  $('#enroll').hidden = !info.enroll;
+  if (!webauthnSupported()) {
+    loginMessage('This browser has no passkey support', true);
+    return;
+  }
+  login.prefetch().catch((e) => loginMessage(explain(e), true));
+}
+
+async function unlock() {
+  loginMessage('');
+  try {
+    await login.run();
+    await enterApp();
+  } catch (e) {
+    loginMessage(explain(e), true);
+    login.prefetch().catch(() => {});
+  }
+}
+
+async function doEnroll() {
+  const token = $('#enroll-token').value.trim();
+  const label = $('#enroll-label').value.trim() || 'passkey';
+  if (token.length < 16) {
+    loginMessage('Paste the enrollment token first', true);
+    return;
+  }
+  try {
+    await enroll.run(token, label);
+    $('#enroll-token').value = '';
+    info.enroll = false;
+    toast('Passkey enrolled. Move it into your credentials secret and turn enrollment off.', { ms: 8000 });
+    await enterApp();
+  } catch (e) {
+    loginMessage(explain(e), true);
+  }
+}
+
+// -- the app ----------------------------------------------------------------
+
+async function enterApp() {
+  let data;
+  try {
+    data = await api('/api/state');
+  } catch (e) {
+    if (e.status === 401) return showLogin();
+    return showOffline();
+  }
+  clearTimeout(offlineTimer);
+  login.stop();
+  config = data.config;
+  document.title = config.appName;
+  if (config.dictation && Recorder.supported() && !keybar.hooks.dictation) {
+    keybar.hooks.dictation = true;
+    keybar.render();
+    dash.hooks.dictateInto = dictate;
+  }
+  dash.setConfig(config);
+  dash.update(data.state);
+  events.start();
+  if (term) {
+    setView('term');
+    closeSheet();
+    term.reconnect();
+  } else {
+    setView('dash');
+  }
+}
+
+function showOffline() {
+  setView('login');
+  $('#enroll').hidden = true;
+  loginMessage(`Can't reach ${location.host}. Retrying…`, true);
+  clearTimeout(offlineTimer);
+  offlineTimer = setTimeout(() => boot(false), 5000);
+}
+
+function onExpired() {
+  events.stop();
+  if (term) {
+    // Keep the frozen terminal on screen; unlock reconnects to the same target.
+    openSheet({
+      title: 'Session expired',
+      sub: 'Unlock to continue where you were.',
+      body: [
+        el('button', {
+          class: 'btn primary wide',
+          type: 'button',
+          onclick: () =>
+            login
+              .run()
+              .then(enterApp)
+              .catch((e) => toast(explain(e), { error: true })),
+          text: 'Unlock',
+        }),
+      ],
+    });
+    login.prefetch().catch(() => {});
+  } else {
+    showLogin('Session expired');
+  }
+}
+
+function updateBadges(state) {
+  const { blocked, done } = dash.counts();
+  try {
+    if (navigator.setAppBadge) {
+      const n = blocked + done;
+      if (n) navigator.setAppBadge(n).catch(() => {});
+      else navigator.clearAppBadge?.().catch(() => {});
+    }
+  } catch {
+    /* badges are optional */
+  }
+  const latest = state.alerts?.items?.[0]?.time || 0;
+  $('#inbox-badge').hidden = !(latest > storage('inboxSeen', 0));
+  $('#act-tmux').hidden = !(app.dataset.view === 'dash' && config?.providers.tmux && state.tmux?.default);
+}
+
+// -- terminal ---------------------------------------------------------------
+
+function prefixFor(t) {
+  const s = dash.state;
+  if (t.k === 'agent' || t.k === 'herdr') return s.herdr?.prefix;
+  if (t.k === 'tmux') return s.tmux?.prefix;
+  return null;
+}
+
+async function openTerm(t) {
+  closeSheet();
+  if (term) term.dispose();
+  target = t;
+  $('#title').textContent = t.title || t.k;
+  $('#term-overlay').hidden = true;
+  setView('term');
+  if (history.state?.term !== true) history.pushState({ term: true }, '');
+  keybar.setPrefix(prefixFor(t));
+  term = new TermView($('#term-host'), t, {
+    onStatus: termStatus,
+    onExpired,
+    transform: (d) => keybar.transform(d),
+  });
+  await term.open();
+}
+
+function closeTerm(fromHistory = false) {
+  if (recorder.active) recorder.cancel();
+  if (term) term.dispose();
+  term = null;
+  target = null;
+  $('#term-overlay').hidden = true;
+  setView('dash');
+  if (!fromHistory && history.state?.term === true) history.back();
+}
+
+function termStatus(status, msg) {
+  const pill = $('#term-status');
+  pill.className = `pill ${status}`;
+  pill.textContent = status === 'live' ? 'live' : status === 'connecting' ? '…' : status;
+  const overlay = $('#term-overlay');
+  const show = status === 'exited' || (status === 'offline' && msg !== 'Session expired');
+  overlay.hidden = !show;
+  if (show) {
+    $('#term-overlay-msg').textContent = msg || status;
+    $('#term-reconnect').textContent = target?.k === 'shell' ? 'New shell' : 'Reconnect';
+  }
+}
+
+function termMenu() {
+  if (!term) return;
+  const t = target;
+  const sel = term.selection();
+  const copy = (text, what) =>
+    navigator.clipboard
+      .writeText(text)
+      .then(() => toast(`${what} copied`))
+      .catch(() => toast('Clipboard not available', { error: true }));
+  const found = t.k === 'agent' ? dash.findPane(t.s, t.t) : null;
+  openSheet({
+    title: t.title || t.k,
+    sub: { agent: `herdr agent · ${t.t}`, herdr: `herdr · ${t.s || 'default'}`, tmux: 'tmux session', shell: 'login shell' }[t.k],
+    body: [
+      items(
+        sel && item({ icon: G.copy, label: 'Copy selection', onSelect: () => copy(sel, 'Selection') }),
+        item({ icon: G.copy, label: 'Copy screen', onSelect: () => copy(term.screenText(), 'Screen') }),
+        found && item({ icon: G.eye, label: 'Mark seen (focuses it in herdr)', onSelect: () => api('/api/action', { method: 'POST', body: { op: 'focus', session: t.s, target: t.t } }).catch((e) => toast(e.message, { error: true })) }),
+        found && item({ icon: G.send, label: 'Prompt…', onSelect: () => dash.promptSheet(t.s, found.p) }),
+        item({ icon: '', label: 'Larger text', close: false, onSelect: () => term.setFontSize(term.term.options.fontSize + 1) }),
+        item({ icon: '', label: 'Smaller text', close: false, onSelect: () => term.setFontSize(term.term.options.fontSize - 1) }),
+        item({ icon: G.refresh, label: t.k === 'shell' ? 'New shell' : 'Reconnect', onSelect: () => term.reconnect() }),
+        item({
+          icon: G.term,
+          label: storage('renderer', 'webgl') === 'webgl' ? 'Use DOM renderer' : 'Use WebGL renderer',
+          onSelect: () => {
+            store('renderer', storage('renderer', 'webgl') === 'webgl' ? 'dom' : 'webgl');
+            openTerm(t);
+          },
+        }),
+        item({ icon: G.close, label: 'Close terminal', onSelect: () => closeTerm() }),
+      ),
+    ],
+  });
+}
+
+function dashMenu() {
+  openSheet({
+    title: config?.appName || 'pasture',
+    sub: location.host,
+    body: [
+      items(
+        item({ icon: G.refresh, label: 'Reload app', onSelect: () => location.reload() }),
+        item({
+          icon: G.signout,
+          label: 'Lock',
+          onSelect: () => {
+            events.stop();
+            logout()
+              .catch(() => {})
+              .then(() => showLogin('Locked'));
+          },
+        }),
+      ),
+    ],
+  });
+}
+
+// -- dictation ---------------------------------------------------------------
+
+async function dictate(btn, onText) {
+  const time = btn.querySelector('.time');
+  if (recorder.active) {
+    btn.classList.remove('rec');
+    if (time) time.textContent = '…';
+    try {
+      const text = await recorder.stop();
+      if (text) onText(text);
+      else toast('Heard nothing');
+    } catch (e) {
+      toast(explain(e), { error: true });
+    } finally {
+      if (time) time.textContent = '';
+    }
+    return;
+  }
+  try {
+    await recorder.start({
+      onTick: (s) => time && (time.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`),
+      onLimit: () => dictate(btn, onText),
+    });
+    btn.classList.add('rec');
+  } catch (e) {
+    toast(e?.name === 'NotAllowedError' ? 'Microphone permission denied' : explain(e), { error: true });
+  }
+}
+
+// -- service worker --------------------------------------------------------------
+
+function registerServiceWorker() {
+  if (!('serviceWorker' in navigator)) return;
+  let reloading = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (reloading) location.reload();
+  });
+  navigator.serviceWorker
+    .register('/sw.js')
+    .then((reg) => {
+      const offer = (worker) =>
+        toast('New version ready. Tap to reload.', {
+          ms: 0,
+          onClick: () => {
+            reloading = true;
+            worker.postMessage('skip-waiting');
+          },
+        });
+      if (reg.waiting && navigator.serviceWorker.controller) offer(reg.waiting);
+      reg.addEventListener('updatefound', () => {
+        const worker = reg.installing;
+        worker?.addEventListener('statechange', () => {
+          if (worker.state === 'installed' && navigator.serviceWorker.controller) offer(worker);
+        });
+      });
+      document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && reg.update().catch(() => {}));
+    })
+    .catch(() => {});
+}
+
+// -- wiring -------------------------------------------------------------------------
+
+function wire() {
+  $('#unlock').addEventListener('click', unlock);
+  $('#enroll-go').addEventListener('click', doEnroll);
+  $('#enroll-token').addEventListener('input', (e) => {
+    const v = e.target.value.trim();
+    if (v.length >= 16) enroll.prefetch(v).catch((err) => loginMessage(explain(err), true));
+  });
+  $('#back').addEventListener('click', () => closeTerm());
+  $('#act-new').addEventListener('click', () => dash.newSheet());
+  $('#act-inbox').addEventListener('click', () => {
+    store('inboxSeen', Math.floor(Date.now() / 1000));
+    $('#inbox-badge').hidden = true;
+    dash.inboxSheet();
+  });
+  $('#act-herdr').addEventListener('click', () => {
+    const s = dash.currentSession();
+    openTerm({ k: 'herdr', s: s?.name, title: `herdr · ${s?.name || 'default'}` });
+  });
+  $('#act-tmux').addEventListener('click', () => {
+    const name = dash.state.tmux?.default;
+    if (name) openTerm({ k: 'tmux', t: name, title: name });
+  });
+  $('#act-menu').addEventListener('click', () => (app.dataset.view === 'term' ? termMenu() : dashMenu()));
+  $('#term-reconnect').addEventListener('click', () => term?.reconnect());
+  window.addEventListener('popstate', () => {
+    if (term && history.state?.term !== true) closeTerm(true);
+  });
+  onViewport(() => term?.scheduleFit());
+
+  keybar = new KeyBar($('#keys'), {
+    send: (s) => term?.sendText(s),
+    appCursor: () => term?.appCursor() ?? false,
+    paste: () =>
+      navigator.clipboard
+        .readText()
+        .then((text) => text && term?.paste(text))
+        .catch(() => toast('Clipboard not available', { error: true })),
+    blur: () => term?.blur(),
+    dictation: false,
+    onMic: (btn) => dictate(btn, (text) => term?.paste(text)),
+  });
+
+  dash = new Dashboard($('#dash'), {
+    openTerm,
+    dictateInto: null,
+  });
+  events = new Events({
+    onState: (state) => {
+      dash.update(state);
+      updateBadges(state);
+    },
+    onAlert: (a) => {
+      if (app.dataset.view === 'dash' && a.kind === 'blocked') toast(`${a.title}: needs you`);
+    },
+    onAuth: onExpired,
+    onConn: setConn,
+  });
+}
+
+async function boot(first = true) {
+  if (first) {
+    initViewport();
+    wire();
+    registerServiceWorker();
+  }
+  try {
+    info = await api('/auth/info');
+  } catch {
+    return showOffline();
+  }
+  if (!info.loggedIn) return showLogin();
+  await enterApp();
+}
+
+boot();
