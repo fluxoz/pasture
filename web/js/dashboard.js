@@ -520,7 +520,23 @@ export class Dashboard {
     const row = el('div', { class: 'row' });
     if (this.hooks.dictateInto) {
       const mic = el('button', { class: 'btn', type: 'button' }, glyph(G.mic), el('span', { class: 'time', text: '' }));
-      mic.addEventListener('click', () => this.hooks.dictateInto(mic, (t) => (text.value = text.value ? `${text.value} ${t}` : t)));
+      // Partial text streams into the box after whatever was typed before.
+      let base = '';
+      let finished = false;
+      const join = (t) => (base && t ? `${base} ${t}` : base || t);
+      const sink = {
+        begin() {
+          base = text.value.trim();
+          finished = false;
+        },
+        partial: (t) => (text.value = join(t)),
+        done(t) {
+          text.value = join(t);
+          finished = true;
+        },
+        end: () => !finished && (text.value = base), // failed or heard nothing: undo the partials
+      };
+      mic.addEventListener('click', () => this.hooks.dictateInto(mic, sink));
       row.append(mic);
     }
     row.append(el('button', { class: 'btn primary', type: 'button', onclick: send }, glyph(G.send), 'Send'));

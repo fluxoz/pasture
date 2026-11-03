@@ -41,6 +41,16 @@ def _int(name: str, default: int) -> int:
         raise ConfigError(f"{name} must be an integer, got {value!r}") from e
 
 
+def _float(name: str, default: float) -> float:
+    value = _env(name)
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except ValueError as e:
+        raise ConfigError(f"{name} must be a number, got {value!r}") from e
+
+
 def _list(name: str) -> list[str]:
     value = _env(name)
     if value is None:
@@ -84,12 +94,15 @@ class Config:
     ntfy_topic: str = "agents"
 
     dictate: bool = False
-    whisper: str | None = None
+    whisper: str | None = None  # whisper.cpp's whisper-server
     whisper_model: str | None = None
-    ffmpeg: str | None = None
+    ffmpeg: str | None = None  # only for uploaded recordings (browsers without AudioWorklet)
     dictate_language: str = "en"
     dictate_threads: int = 4
     dictate_max_seconds: int = 60
+    dictate_idle_minutes: float = 30.0  # stop the model after this long unused; 0 = keep it
+    dictate_prompt: str = ""
+    dictate_args: list[str] = field(default_factory=list)
 
     cert_file: Path | None = None
 
@@ -128,6 +141,16 @@ def load() -> Config:
 
     roots = [Path(p).expanduser() for p in _list("PASTURE_PROJECT_ROOTS")] or [Path.home()]
 
+    dictate_args: list[str] = []
+    raw = _env("PASTURE_DICTATE_ARGS")
+    if raw:
+        try:
+            dictate_args = json.loads(raw)
+        except json.JSONDecodeError as e:
+            raise ConfigError("PASTURE_DICTATE_ARGS must be a JSON list of strings") from e
+        if not (isinstance(dictate_args, list) and all(isinstance(a, str) for a in dictate_args)):
+            raise ConfigError("PASTURE_DICTATE_ARGS must be a JSON list of strings")
+
     cfg = Config(
         host=host,
         origin=origin.rstrip("/"),
@@ -156,12 +179,15 @@ def load() -> Config:
         ntfy_url=(_env("PASTURE_NTFY") or "").rstrip("/") or None,
         ntfy_topic=_env("PASTURE_NTFY_TOPIC", "agents") or "agents",
         dictate=_bool("PASTURE_DICTATE", False),
-        whisper=_env("PASTURE_DICTATE_WHISPER"),
+        whisper=_env("PASTURE_DICTATE_SERVER"),
         whisper_model=_env("PASTURE_DICTATE_MODEL"),
         ffmpeg=_env("PASTURE_DICTATE_FFMPEG"),
         dictate_language=_env("PASTURE_DICTATE_LANGUAGE", "en") or "en",
         dictate_threads=_int("PASTURE_DICTATE_THREADS", 4),
         dictate_max_seconds=_int("PASTURE_DICTATE_MAX_SECONDS", 60),
+        dictate_idle_minutes=_float("PASTURE_DICTATE_IDLE_MINUTES", 30.0),
+        dictate_prompt=_env("PASTURE_DICTATE_PROMPT", "") or "",
+        dictate_args=dictate_args,
         cert_file=_path("PASTURE_CERT_FILE"),
     )
     # systemd's StateDirectory=/RuntimeDirectory= export these.
@@ -171,8 +197,8 @@ def load() -> Config:
     runtime = _path("PASTURE_RUNTIME_DIR") or _path("RUNTIME_DIRECTORY")
     if runtime:
         cfg.runtime_dir = runtime
-    if cfg.dictate and not (cfg.whisper and cfg.whisper_model and cfg.ffmpeg):
-        raise ConfigError("dictation needs PASTURE_DICTATE_WHISPER, PASTURE_DICTATE_MODEL and PASTURE_DICTATE_FFMPEG")
+    if cfg.dictate and not (cfg.whisper and cfg.whisper_model):
+        raise ConfigError("dictation needs PASTURE_DICTATE_SERVER (whisper-server) and PASTURE_DICTATE_MODEL")
     return cfg
 
 

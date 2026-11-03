@@ -4,8 +4,8 @@
    sheets animate. */
 
 :root {
-  --bar-h: 46px;
-  --key-h: 46px;
+  --bar-h: 54px;
+  --key-h: 54px;
   --radius: 12px;
   --sat: env(safe-area-inset-top, 0px);
   --sab: env(safe-area-inset-bottom, 0px);
@@ -15,7 +15,7 @@
 }
 
 @media (orientation: landscape) and (max-height: 520px) {
-  :root { --bar-h: 34px; --key-h: 38px; }
+  :root { --bar-h: 42px; --key-h: 44px; }
 }
 
 *, *::before, *::after { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -41,7 +41,8 @@ input, select, textarea { font-size: 16px; } /* 16px stops iOS zooming on focus 
 button { cursor: pointer; }
 [hidden] { display: none !important; }
 
-.nf { font-family: "pasture-mono"; font-style: normal; font-weight: 400; line-height: 1; display: inline-block; }
+/* UI icons come from a full-size icon font: a Nerd Font *Mono* squeezes them into one narrow cell. */
+.nf { font-family: "pasture-icons", "pasture-mono"; font-style: normal; font-weight: 400; line-height: 1; display: inline-block; }
 
 /* ---- shell -------------------------------------------------------------- */
 
@@ -89,24 +90,24 @@ button { cursor: pointer; }
 .icon {
   position: relative;
   flex: 0 0 auto;
-  width: 40px;
-  height: 40px;
+  width: 48px;
+  height: 48px;
   display: grid;
   place-items: center;
   border: 0;
-  border-radius: 10px;
+  border-radius: 12px;
   background: transparent;
   color: var(--subtext);
-  font-size: 18px;
+  font-size: 24px;
 }
 .icon:active { background: var(--surface0); color: var(--bright); }
 .icon .badge {
   position: absolute;
-  top: 6px;
-  right: 6px;
-  min-width: 8px;
-  height: 8px;
-  border-radius: 4px;
+  top: 8px;
+  right: 8px;
+  min-width: 10px;
+  height: 10px;
+  border-radius: 5px;
   background: var(--red);
   box-shadow: 0 0 0 2px var(--mantle);
 }
@@ -148,6 +149,7 @@ main { position: relative; min-height: 0; overflow: hidden; }
   user-select: none;
 }
 .btn:active { background: var(--surface1); }
+.btn .nf { font-size: 19px; }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--crust); }
 .btn.primary:active { filter: brightness(.9); }
 .btn.danger { color: var(--red); }
@@ -250,17 +252,17 @@ select {
   border: 0;
   background: none;
   color: var(--faint);
-  font-size: 14px;
-  height: 28px;
-  width: 32px;
-  border-radius: 8px;
+  font-size: 19px;
+  height: 36px;
+  width: 42px;
+  border-radius: 10px;
 }
 .section-head button:active { background: var(--surface0); }
 
 .card {
   position: relative;
   display: grid;
-  grid-template-columns: 26px minmax(0, 1fr) auto;
+  grid-template-columns: 32px minmax(0, 1fr) auto;
   grid-template-rows: 20px 18px 34px;
   column-gap: 10px;
   row-gap: 2px;
@@ -276,7 +278,7 @@ select {
 }
 .card.compact { grid-template-rows: 20px 18px; height: 60px; }
 .card:active, .card.pressed { background: var(--surface1); }
-.card .glyph { grid-row: 1 / span 2; align-self: center; font-size: 20px; color: var(--accent2); text-align: center; }
+.card .glyph { grid-row: 1 / span 2; align-self: center; font-size: 27px; color: var(--accent2); text-align: center; }
 .card.plain .glyph { color: var(--overlay1); }
 .card .name { color: var(--bright); font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .card .meta { grid-column: 2 / span 2; color: var(--muted); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -320,9 +322,9 @@ select {
 .pill.working { color: var(--yellow); }
 .pill.working::before { animation: pulse 1.6s ease-in-out infinite; display: inline-block; }
 .pill.blocked { color: var(--red); }
-.pill.blocked::before { content: "\f0f3"; font-size: 10px; }
+.pill.blocked::before { content: "\f0f3"; font-family: "pasture-icons", "pasture-mono"; font-size: 11px; }
 .pill.done { color: var(--green); }
-.pill.done::before { content: "\f00c"; font-size: 10px; }
+.pill.done::before { content: "\f00c"; font-family: "pasture-icons", "pasture-mono"; font-size: 11px; }
 .pill.idle { color: var(--muted); }
 .pill.unknown { color: var(--faint); }
 .pill.attached { color: var(--blue); }
@@ -376,9 +378,11 @@ select {
   background: var(--mantle);
   border-top: 1px solid var(--surface0);
 }
-#app[data-view="term"] .keybar { display: block; }
+#app[data-view="term"] .keybar { display: flex; }
 .kb-open .keybar { height: var(--key-h); padding-bottom: 0; }
 .keys {
+  flex: 1;
+  min-width: 0;
   height: var(--key-h);
   display: flex;
   align-items: center;
@@ -395,24 +399,67 @@ select {
 .keys::-webkit-scrollbar { display: none; }
 .key {
   flex: 0 0 auto;
-  min-width: 42px;
+  min-width: 46px;
   height: calc(var(--key-h) - 12px);
-  padding: 0 10px;
-  border-radius: 8px;
+  padding: 0 11px;
+  border-radius: 9px;
   border: 1px solid var(--surface1);
   background: var(--surface0);
   color: var(--text);
-  font-size: 14px;
+  font-size: 17px;
   display: grid;
   place-items: center;
   touch-action: manipulation;
 }
-.key.mod { color: var(--subtext); font-size: 13px; }
+.key .nf { font-size: 21px; }
+.key.mod { color: var(--subtext); font-size: 15px; }
 .key:active, .key.down { background: var(--surface2); }
 .key.on { background: var(--accent); border-color: var(--accent); color: var(--crust); }
 .key.lock { background: var(--accent); border-color: var(--bright); color: var(--crust); box-shadow: inset 0 -3px 0 rgb(var(--crust-rgb) / .35); }
-.key.rec { color: var(--red); border-color: rgb(var(--red-rgb) / .6); }
 .key .time { display: inline-block; width: 4ch; text-align: left; font-size: 12px; }
+
+/* The mic stays put at the right end while the keys scroll. */
+.keys-end { flex: 0 0 auto; display: flex; align-items: center; padding: 0 8px 0 6px; border-left: 1px solid var(--surface0); }
+.keys-end:empty { display: none; }
+.key.mic {
+  min-width: 64px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  color: var(--accent);
+  border-color: rgb(var(--accent-rgb) / .45);
+  -webkit-touch-callout: none;
+}
+.key.mic .nf { font-size: 24px; }
+.key.mic .time:empty { display: none; }
+.rec { color: var(--red) !important; border-color: rgb(var(--red-rgb) / .7) !important; }
+.key.mic.rec { background: rgb(var(--red-rgb) / .16); box-shadow: 0 0 0 calc(var(--level, 0) * 7px) rgb(var(--red-rgb) / .3); }
+.key.mic.busy .nf, .btn.busy .nf { animation: pulse 1s ease-in-out infinite; }
+
+/* Live transcript while dictating into the terminal. */
+.dictation {
+  position: absolute;
+  left: calc(10px + var(--sal));
+  right: calc(10px + var(--sar));
+  bottom: 10px;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  max-height: 40%;
+  padding: 12px 14px;
+  border-radius: var(--radius);
+  border: 1px solid rgb(var(--red-rgb) / .5);
+  background: rgb(var(--mantle-rgb) / .96);
+  box-shadow: 0 8px 24px rgb(0 0 0 / .35);
+  pointer-events: none;
+  z-index: 5;
+}
+.dictation .dot { flex: 0 0 auto; width: 10px; height: 10px; margin-top: 6px; border-radius: 50%; background: var(--red); transform: scale(calc(.7 + var(--level, 0) * .9)); }
+.dictation p { margin: 0; overflow: hidden; color: var(--bright); font-size: 16px; line-height: 1.4; overflow-wrap: anywhere; }
+.dictation p:empty::before { content: "Listening…"; color: var(--muted); }
+.dictation.busy { border-color: var(--surface2); }
+.dictation.busy .dot { background: var(--muted); animation: pulse 1s ease-in-out infinite; }
 .key.sep { min-width: 1px; width: 1px; padding: 0; border: 0; background: var(--surface1); height: 20px; }
 
 /* ---- sheets ------------------------------------------------------------- */
@@ -447,7 +494,7 @@ select {
 .sheet .item {
   position: relative;
   overflow: hidden;
-  height: 48px;
+  height: 52px;
   padding: 0 14px;
   border-radius: 10px;
   border: 0;
@@ -459,7 +506,7 @@ select {
   color: var(--text);
 }
 .sheet .item:active { background: var(--surface1); }
-.sheet .item .nf { width: 20px; text-align: center; color: var(--accent); }
+.sheet .item .nf { width: 26px; font-size: 21px; text-align: center; color: var(--accent); }
 .sheet .item.danger, .sheet .item.danger .nf { color: var(--red); }
 .sheet .item .fill {
   position: absolute;

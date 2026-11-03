@@ -14,7 +14,7 @@
       forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
     in
     {
-      # mkWeb pkgs { theme ? <palette attrs>; fonts ? { family; regular; bold; }; appName; shortName; }
+      # mkWeb pkgs { theme ? <palette attrs>; fonts ? { family; regular; bold; }; iconFont; appName; shortName; }
       lib.mkWeb = pkgs: args: pkgs.callPackage ./nix/web.nix args;
 
       packages = forAllSystems (pkgs: {

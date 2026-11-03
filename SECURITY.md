@@ -50,8 +50,11 @@ SSH: one owner, a private network, and never the public internet.
   phone for every domain unless it is name-constrained. Keep its key offline
   or encrypted, or use a name-constrained intermediate.
 - A gateway restart logs everyone out (sessions are in memory).
-- Audio for dictation exists only in a private temporary directory for the
-  duration of the request and is never logged.
+- Dictation audio is held in the gateway's memory for one recording and sent
+  only to whisper-server on 127.0.0.1 (uploads from older browsers pass
+  through a private temporary directory). Audio and text are never logged.
+  While whisper-server runs, other local users can reach its loopback port;
+  on a shared machine leave dictation off or set `idleMinutes` low.
 
 ## Reporting a vulnerability
 

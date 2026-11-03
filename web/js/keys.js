@@ -12,11 +12,14 @@ export class KeyBar {
   /**
    * @param {HTMLElement} host
    * @param {{send:(s:string)=>void, appCursor:()=>boolean, paste:()=>void,
-   *          blur:()=>void, dictation:boolean, onMic:(btn:HTMLElement)=>void}} hooks
+   *          blur:()=>void, dictation:boolean, onMicDown:(btn:HTMLElement)=>void,
+   *          onMicUp:(btn:HTMLElement)=>void}} hooks
+   * @param {HTMLElement} [end] fixed slot after the scrolling keys (the mic)
    */
-  constructor(host, hooks) {
+  constructor(host, hooks, end) {
     this.host = host;
     this.hooks = hooks;
+    this.end = end;
     this.ctrl = 'off'; // off | once | lock
     this.alt = 'off';
     this.prefix = null;
@@ -121,8 +124,16 @@ export class KeyBar {
     this.prefixBtn.hidden = true;
     this.micBtn = null;
     if (this.hooks.dictation) {
-      this.micBtn = this.button('', { cls: 'key', aria: 'dictate', click: () => this.hooks.onMic(this.micBtn) });
-      this.micBtn.append(glyph(G.mic), el('span', { class: 'time' }));
+      // Tap to start/stop, or hold to talk: the app decides on release.
+      const mic = el('button', { class: 'key mic', type: 'button', 'aria-label': 'dictate' }, glyph(G.mic), el('span', { class: 'time' }));
+      mic.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        vibrate(6);
+        this.hooks.onMicDown(mic);
+      });
+      mic.addEventListener('pointerup', () => this.hooks.onMicUp(mic));
+      mic.addEventListener('contextmenu', (e) => e.preventDefault());
+      this.micBtn = mic;
     }
     const row = [
       k('esc', '\x1b', { cls: 'key mod' }),
@@ -134,7 +145,6 @@ export class KeyBar {
       arrow('↑', 'up'),
       arrow('→', 'right'),
       this.prefixBtn,
-      this.micBtn,
       k('|', '|'),
       k('~', '~'),
       k('/', '/'),
@@ -147,6 +157,7 @@ export class KeyBar {
       this.button(glyph(G.keyboard), { aria: 'hide keyboard', click: () => this.hooks.blur() }),
     ].filter(Boolean);
     this.host.replaceChildren(...row);
+    this.end?.replaceChildren(...[this.micBtn].filter(Boolean));
   }
 }
 

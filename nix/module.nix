@@ -109,12 +109,17 @@ let
     }
     // lib.optionalAttrs cfg.dictation.enable {
       PASTURE_DICTATE = "1";
-      PASTURE_DICTATE_WHISPER = "${cfg.dictation.package}/bin/whisper-cli";
+      PASTURE_DICTATE_SERVER = lib.getExe' cfg.dictation.package "whisper-server";
       PASTURE_DICTATE_MODEL = toString cfg.dictation.model;
       PASTURE_DICTATE_FFMPEG = "${cfg.dictation.ffmpegPackage}/bin/ffmpeg";
       PASTURE_DICTATE_LANGUAGE = cfg.dictation.language;
       PASTURE_DICTATE_THREADS = toString cfg.dictation.threads;
       PASTURE_DICTATE_MAX_SECONDS = toString cfg.dictation.maxSeconds;
+      PASTURE_DICTATE_IDLE_MINUTES = toString cfg.dictation.idleMinutes;
+      PASTURE_DICTATE_ARGS = builtins.toJSON cfg.dictation.extraArgs;
+    }
+    // lib.optionalAttrs (cfg.dictation.enable && cfg.dictation.prompt != null) {
+      PASTURE_DICTATE_PROMPT = cfg.dictation.prompt;
     }
     // cfg.extraEnvironment
   );
@@ -368,8 +373,13 @@ in
     };
 
     dictation = {
-      enable = mkEnableOption "the dictation button (audio is transcribed on this host by whisper.cpp)";
-      package = lib.mkPackageOption pkgs "whisper-cpp" { };
+      enable = mkEnableOption ''
+        the dictation button. Audio is transcribed on this host by whisper.cpp's
+        whisper-server, which the gateway starts on first use and keeps loaded
+        (partial text while you talk, the final text right after)'';
+      package = lib.mkPackageOption pkgs "whisper-cpp" {
+        extraDescription = "Must provide `bin/whisper-server`. Use whisper-cpp-vulkan (or a CUDA build) for a GPU.";
+      };
       model = mkOption {
         type = types.nullOr types.path;
         default = null;
@@ -393,7 +403,26 @@ in
         type = types.ints.positive;
         default = 60;
       };
-      ffmpegPackage = lib.mkPackageOption pkgs "ffmpeg-headless" { };
+      idleMinutes = mkOption {
+        type = types.numbers.nonnegative;
+        default = 30;
+        description = "Stop whisper-server (freeing its memory) after this long without dictation; 0 keeps it loaded.";
+      };
+      prompt = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        example = "Claude, tmux, NixOS, git rebase, pull request.";
+        description = "Initial prompt for whisper: words and spellings to expect.";
+      };
+      extraArgs = mkOption {
+        type = types.listOf types.str;
+        default = [ ];
+        example = [ "--device" "1" ];
+        description = "Extra whisper-server arguments.";
+      };
+      ffmpegPackage = lib.mkPackageOption pkgs "ffmpeg-headless" {
+        extraDescription = "Only decodes uploaded recordings, from browsers without AudioWorklet.";
+      };
     };
 
     theme = {

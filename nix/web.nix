@@ -11,6 +11,9 @@
   theme ? import ./themes/default.nix,
   # { family; regular; bold ? null; } with TTF/OTF paths; null = JetBrainsMono Nerd Font Mono.
   fonts ? null,
+  # Full-size Nerd Font icons for the UI (subset at build time to the ones used);
+  # null falls back to the text font's (cell-sized) icons.
+  iconFont ? "${nerd-fonts.symbols-only}/share/fonts/truetype/NerdFonts/Symbols/SymbolsNerdFont-Regular.ttf",
   appName ? "pasture",
   shortName ? appName,
   vendor ? callPackage ./vendor.nix { },
@@ -43,7 +46,10 @@ in
 runCommand "pasture-web"
   {
     nativeBuildInputs = [
-      python3
+      (python3.withPackages (ps: [
+        ps.fonttools
+        ps.brotli
+      ]))
       woff2
     ];
     passthru = { inherit vendor font; };
@@ -63,6 +69,7 @@ runCommand "pasture-web"
       --vendor ${vendor} \
       --font-regular regular.woff2 \
       ${lib.optionalString (font.bold != null) "--font-bold bold.woff2"} \
+      ${lib.optionalString (iconFont != null) "--icons ${iconFont}"} \
       --app-name ${lib.escapeShellArg appName} \
       --short-name ${lib.escapeShellArg shortName} \
       --out $out

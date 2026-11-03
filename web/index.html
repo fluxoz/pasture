@@ -64,6 +64,7 @@
 
     <section class="view" id="view-term">
       <div class="term-host" id="term-host"></div>
+      <div class="dictation" id="dictation" hidden><span class="dot"></span><p id="dictation-text"></p></div>
       <div class="term-overlay" id="term-overlay" hidden>
         <p id="term-overlay-msg"></p>
         <button class="btn" id="term-reconnect" type="button">Reconnect</button>
@@ -71,7 +72,7 @@
     </section>
   </main>
 
-  <footer class="keybar" id="keybar"><div class="keys" id="keys"></div></footer>
+  <footer class="keybar" id="keybar"><div class="keys" id="keys"></div><div class="keys-end" id="keys-end"></div></footer>
 
   <div class="sheet-root" id="sheet-root"></div>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>

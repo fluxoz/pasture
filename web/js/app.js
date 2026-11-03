@@ -8,7 +8,7 @@ import { TermView } from './term.js';
 import { KeyBar } from './keys.js';
 import { Recorder } from './dictate.js';
 import { openSheet, closeSheet, item, items } from './sheet.js';
-import { $, el, G, toast, storage, store } from './util.js';
+import { $, el, G, toast, storage, store, vibrate } from './util.js';
 
 const app = $('#app');
 const login = new Login();
@@ -141,7 +141,7 @@ async function enterApp() {
   if (config.dictation && Recorder.supported() && !keybar.hooks.dictation) {
     keybar.hooks.dictation = true;
     keybar.render();
-    dash.hooks.dictateInto = dictate;
+    dash.hooks.dictateInto = toggleDictation;
   }
   dash.setConfig(config);
   dash.update(data.state);
@@ -232,7 +232,10 @@ async function openTerm(t) {
 }
 
 function closeTerm(fromHistory = false) {
-  if (recorder.active) recorder.cancel();
+  if (dict.state !== 'idle') {
+    recorder.cancel();
+    endDictation();
+  }
   if (term) term.dispose();
   term = null;
   target = null;
@@ -284,6 +287,12 @@ function termMenu() {
             openTerm(t);
           },
         }),
+        config?.dictation &&
+          item({
+            icon: G.mic,
+            label: storage('dictateEnter', '0') === '1' ? 'Dictation: stop pressing Enter' : 'Dictation: press Enter after',
+            onSelect: () => store('dictateEnter', storage('dictateEnter', '0') === '1' ? '0' : '1'),
+          }),
         item({ icon: G.close, label: 'Close terminal', onSelect: () => closeTerm() }),
       ),
     ],
@@ -314,32 +323,108 @@ function dashMenu() {
 
 // -- dictation ---------------------------------------------------------------
 
-async function dictate(btn, onText) {
-  const time = btn.querySelector('.time');
-  if (recorder.active) {
-    btn.classList.remove('rec');
-    if (time) time.textContent = '…';
-    try {
-      const text = await recorder.stop();
-      if (text) onText(text);
-      else toast('Heard nothing');
-    } catch (e) {
-      toast(explain(e), { error: true });
-    } finally {
-      if (time) time.textContent = '';
-    }
-    return;
-  }
+// Tap the mic to start and again to stop, or hold it while talking and let go.
+// Partial text shows while you speak; the final text goes to the sink.
+
+const HOLD_MS = 350;
+const dict = { state: 'idle', btn: null, sink: null, pressedAt: 0, stopOnRelease: false }; // idle | starting | recording | finishing
+
+function micDown(btn, sink) {
+  if (dict.state === 'recording') dict.stopOnRelease = true;
+  if (dict.state !== 'idle') return;
+  dict.pressedAt = Date.now();
+  dict.stopOnRelease = false;
+  startDictation(btn, sink);
+}
+
+function micUp() {
+  // Released while still starting (permission prompt, say): keep recording, tap to stop.
+  if (dict.state === 'recording' && (dict.stopOnRelease || Date.now() - dict.pressedAt >= HOLD_MS)) finishDictation();
+}
+
+function toggleDictation(btn, sink) {
+  if (dict.state === 'recording') finishDictation();
+  else if (dict.state === 'idle') startDictation(btn, sink);
+}
+
+function setMicTime(btn, s) {
+  const time = btn?.querySelector('.time');
+  if (time) time.textContent = s == null ? '' : `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+
+async function startDictation(btn, sink) {
+  Object.assign(dict, { state: 'starting', btn, sink });
+  btn.classList.add('rec');
+  sink.begin?.();
   try {
     await recorder.start({
-      onTick: (s) => time && (time.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`),
-      onLimit: () => dictate(btn, onText),
+      onTick: (s) => setMicTime(btn, s),
+      onLimit: () => dict.state === 'recording' && finishDictation(),
+      onPartial: (text) => dict.sink === sink && sink.partial?.(text),
+      onLevel: (v) => {
+        const level = Math.min(1, v * 2.5).toFixed(2);
+        btn.style.setProperty('--level', level);
+        sink.level?.(level);
+      },
+      onError: (e) => {
+        if (dict.state !== 'recording') return;
+        recorder.cancel();
+        endDictation();
+        toast(explain(e), { error: true });
+      },
     });
-    btn.classList.add('rec');
+    if (dict.state !== 'starting') return; // cancelled meanwhile
+    dict.state = 'recording';
+    vibrate(10);
   } catch (e) {
-    toast(e?.name === 'NotAllowedError' ? 'Microphone permission denied' : explain(e), { error: true });
+    if (dict.btn === btn) endDictation();
+    if (e?.message !== 'Cancelled') toast(e?.name === 'NotAllowedError' ? 'Microphone permission denied' : explain(e), { error: true });
   }
 }
+
+async function finishDictation() {
+  const { btn, sink } = dict;
+  dict.state = 'finishing';
+  btn.classList.remove('rec');
+  btn.classList.add('busy');
+  sink.busy?.();
+  try {
+    const text = await recorder.stop();
+    if (text) sink.done(text);
+    else toast('Heard nothing');
+  } catch (e) {
+    toast(explain(e), { error: true });
+  } finally {
+    if (dict.btn === btn) endDictation();
+  }
+}
+
+function endDictation() {
+  const { btn, sink } = dict;
+  btn?.classList.remove('rec', 'busy');
+  btn?.style.removeProperty('--level');
+  setMicTime(btn, null);
+  sink?.end?.();
+  Object.assign(dict, { state: 'idle', btn: null, sink: null });
+}
+
+/** Dictating into the terminal: a live transcript over its bottom, then a paste. */
+const termSink = {
+  begin() {
+    $('#dictation').classList.remove('busy');
+    $('#dictation-text').textContent = '';
+    $('#dictation').hidden = false;
+  },
+  partial: (text) => ($('#dictation-text').textContent = text),
+  level: (v) => $('#dictation').style.setProperty('--level', v),
+  busy: () => $('#dictation').classList.add('busy'),
+  done(text) {
+    const enter = storage('dictateEnter', '0') === '1';
+    term?.paste(enter ? text : `${text} `);
+    if (enter) term?.sendText('\r');
+  },
+  end: () => ($('#dictation').hidden = true),
+};
 
 // -- service worker --------------------------------------------------------------
 
@@ -413,8 +498,9 @@ function wire() {
         .catch(() => toast('Clipboard not available', { error: true })),
     blur: () => term?.blur(),
     dictation: false,
-    onMic: (btn) => dictate(btn, (text) => term?.paste(text)),
-  });
+    onMicDown: (btn) => micDown(btn, termSink),
+    onMicUp: () => micUp(),
+  }, $('#keys-end'));
 
   dash = new Dashboard($('#dash'), {
     openTerm,

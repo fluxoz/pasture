@@ -17,7 +17,7 @@ from aiohttp import web
 from . import validate
 from .auth import Auth, AuthError
 from .config import Config, read_secret
-from .dictate import Dictation, DictationError
+from .dictate import MAX_STREAMS, Dictation, DictationError
 from .hub import Hub
 from .providers import ActionError
 from .providers.alerts import AlertsProvider
@@ -452,7 +452,7 @@ class Gateway:
             return json_error(413, "recording too long")
         audio = await request.content.read(limit + 1)
         try:
-            text = await self.dictation.transcribe(audio)
+            text = await self.dictation.transcribe_upload(audio)
         except DictationError as e:
             return json_error(e.status, str(e))
         return web.json_response({"text": text})
@@ -513,6 +513,21 @@ class Gateway:
                 self.tmux.mark_seen(q.get("t") or self.cfg.tmux_default or "")
         return ws
 
+    async def ws_dictate(self, request: web.Request) -> web.StreamResponse:
+        session = self.session(request)
+        if session is None:
+            return json_error(401, "login required")
+        if request.headers.get("Origin") != self.cfg.origin:
+            return json_error(403, "bad origin")
+        if self.dictation is None:
+            return json_error(404, "dictation is off")
+        if self.dictation.streams >= MAX_STREAMS:
+            return json_error(429, "busy with other recordings")
+        ws = web.WebSocketResponse(max_msg_size=256 * 1024, heartbeat=30.0, compress=False)
+        await ws.prepare(request)
+        await self.dictation.stream(ws)
+        return ws
+
     # -- static and health ----------------------------------------------
 
     async def healthz(self, request: web.Request) -> web.Response:
@@ -552,6 +567,8 @@ class Gateway:
         for provider in (self.tmux, self.herdr, self.alerts):
             if provider is not None:
                 await provider.stop()
+        if self.dictation is not None:
+            await self.dictation.close()
 
     def app(self) -> web.Application:
         app = web.Application(middlewares=[self.headers_mw], client_max_size=2 * 1024 * 1024 + 1024)
@@ -570,6 +587,7 @@ class Gateway:
         r.add_post("/api/action", self.api_action)
         r.add_post("/api/dictate", self.api_dictate)
         r.add_get("/ws/term", self.ws_term)
+        r.add_get("/ws/dictate", self.ws_dictate)
         r.add_get("/{path:.*}", self.static_handler)
         app.on_startup.append(self.on_startup)
         app.on_cleanup.append(self.on_cleanup)
