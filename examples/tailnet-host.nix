@@ -1,5 +1,7 @@
-# A NixOS host on a Tailscale tailnet, certificate from your own CA (or see
-# acme-host.nix). Import from a flake that has `inputs.pasture`.
+# A NixOS host on a Tailscale tailnet served by nginx with a certificate from
+# your own CA, so the host name never reaches Certificate Transparency logs
+# (or see acme-host.nix). For the simple path, see agents-host.nix.
+# Import from a flake that has `inputs.pasture`.
 {
   inputs,
   config,
@@ -11,6 +13,7 @@
 
   services.pasture = {
     enable = true;
+    frontend = "nginx";
     user = "alice";
     hostName = "myhost.example.ts.net";
     listenAddresses = [ "100.64.0.10" ]; # example; use your `tailscale ip -4`

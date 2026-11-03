@@ -17,8 +17,10 @@ SSH: one owner, a private network, and never the public internet.
   Secure, HttpOnly, SameSite=Strict.
 - Replay: login and registration challenges are random, single-use and expire
   after 120 seconds. Authenticator sign counters are checked when non-zero.
-- Enrollment abuse: enrollment is off by default; when on, it needs a token
-  compared in constant time, which is burned (persistently) on first use.
+- Enrollment abuse: enrollment needs a one-time token compared in constant
+  time and burned (persistently) on first use. Without a credentials secret
+  the token lives in the user's state dir and `pasture enroll` renews it, so
+  only someone who can read your files can enroll a device.
   `pasture-enroll` shows it as a QR code (in the URL fragment, never sent to
   the server or logged); anyone who sees that code before you scan it could
   enroll first, and the gateway logs every enrollment.
@@ -38,14 +40,21 @@ SSH: one owner, a private network, and never the public internet.
   provider (e.g. your iCloud account): a session is a shell.
 - Anyone who can already run code as your user on the host.
 - Exposure beyond a private network. Nothing in pasture is designed to face
-  the internet; the module refuses wildcard listen addresses unless you opt in.
+  the internet: never put it behind `tailscale funnel` or a public proxy. The
+  nginx frontend refuses wildcard listen addresses unless you opt in.
 - Other users of a shared VPN reaching the login page. Restrict the port with
   your VPN's ACLs (for Tailscale: only your own devices to `host:443`).
 
 **Operational notes**
 
-- The TLS key belongs to nginx; the gateway (which spawns shells) never needs
-  to read it.
+- With the nginx frontend the TLS key belongs to nginx; the gateway (which
+  spawns shells) never reads it. With `tailscale serve`, tailscaled holds the
+  ts.net certificate, and the host name is in public CT logs.
+- Web Push: alerts go to the device's push service (Apple, Google or Mozilla)
+  encrypted end to end (RFC 8291); the service sees size and timing. Only
+  devices whose passkey is still allowed get them, only known push services
+  are contacted, and nothing is sent until a device turns notifications on.
+  The VAPID key and subscriptions live in the state dir (0600).
 - If you sign the certificate with your own CA, that root is trusted by your
   phone for every domain unless it is name-constrained. Keep its key offline
   or encrypted, or use a name-constrained intermediate.

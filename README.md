@@ -1,273 +1,221 @@
 # pasture
 
-A passkey-gated terminal and session dashboard for your own machine, installed
-on your phone's home screen as a web app.
+**Your coding agents, on your phone.** A passkey-gated terminal and agent
+dashboard for your own machine, served only on your Tailscale network and
+installed on your phone's home screen.
 
-Open it, unlock with Face ID (a passkey, no passwords), and you get a live
-dashboard of what is running on the machine: tmux sessions and, if you use
-[herdr](https://herdr.dev), every workspace and coding agent with its state
-(working, needs you, done, idle) and its last lines of output. Tap one for a
-full-screen terminal attached to it, with a key bar for Esc, Ctrl, arrows and
-your multiplexer prefix. Optionally, a mic button transcribes speech on the
-machine itself with whisper.cpp.
+![The dashboard, live dictation and an agent finishing a task](docs/screenshots.png)
 
-It is a NixOS module. Nothing about it talks to a third party at runtime: no
-CDN, no push relay, no tunnel. Fonts and xterm.js are bundled at build time.
+▶ [35-second demo video](docs/demo.mp4)
 
-> Screenshot: _dashboard, terminal and sheets (placeholder)_
-
-## Features
-
-- **Passkey login** (WebAuthn): Face ID / Touch ID / a security key. Resident
-  keys, user verification required, no attestation. One-time enrollment token.
-- **Installable PWA** that holds still: no layout shift, no bounce, the
-  terminal resizes with the on-screen keyboard instead of scrolling the page.
-- **Terminal**: xterm.js over a WebSocket to a PTY on the host. Targets are a
-  fixed set: a login shell, `tmux new-session -A -s <name>`, `herdr agent
-  attach <pane>`, or the full herdr TUI. Closing the terminal ends only the
-  attach client, never the tmux session or herdr pane. Rendering uses xterm's
-  DOM renderer; WebGL can be switched on per device from the terminal menu.
-- **Key bar**: Esc, Tab, sticky Ctrl/Alt (double-tap locks), arrows with
-  auto-repeat, symbols, PgUp/PgDn, the multiplexer prefix, paste, hide keyboard.
-  One-finger drag scrolls, pinch changes the font size.
-- **Dashboards** (each optional):
-  - tmux: list, attach, create in a project directory, rename, kill.
-  - herdr: sessions, workspaces, tabs and panes from herdr's socket API with
-    live events; agent status, unseen-done dots, previews; start an agent in a
-    project, rename, mark seen, send quick keys (Esc, Enter, y/n, 1-3, Ctrl-C),
-    send a prompt, close a pane or workspace.
-  - alerts: an inbox fed by an ntfy topic on the same host.
-- **Dictation** (optional): the round mic at the right end of the key bar.
-  Tap to start, or hold it while you talk. Audio streams to the host as
-  16 kHz PCM in 50 ms chunks to whisper.cpp's `whisper-server`, which the
-  gateway loads and warms at startup; partial text updates about ten times a
-  second while you talk. A pause (0.6-2.5 s, or off) ends the recording and
-  the text is typed, then Enter is pressed if "send" is on; both are
-  per-device settings in the terminal menu. With a GPU build of whisper.cpp
-  the text lands about 50 ms after the pause is detected.
-- **Themes**: any palette attrset (see [nix/themes/schema.md](nix/themes/schema.md))
-  and any Nerd Font.
-
-## Security model
-
-Read this before you deploy it. pasture gives whoever unlocks it **a shell as
-your user**. It is built for one owner on a private network.
-
-- **Never expose it to the public internet.** Bind it to a VPN or LAN address
-  (`listenAddresses`), open the port only on that interface
-  (`firewall.interfaces`) and restrict client networks (`allowedCIDRs`).
-- TLS is terminated by nginx; the certificate must be one your phone trusts
-  (WebAuthn does not run on a page with a certificate error).
-- Authentication happens in the gateway, not in nginx: even a local process
-  that talks to the loopback port needs a valid session.
-- Passkeys: exact origin and RP ID checks, user verification required,
-  single-use 120 s challenges. Enrollment is off by default and needs a
-  one-time token that is burned on use.
-- Sessions: `__Host-` cookie (Secure, HttpOnly, SameSite=Strict), 30 min idle
-  and 8 h absolute by default, kept in memory (a restart logs you out).
-- Every POST needs the exact `Origin` and a custom header; the WebSocket
-  checks `Origin` too. Strict CSP: scripts, fonts and connections are
-  same-origin only.
-- The terminal runs a fixed argv per target kind; names and IDs are validated
-  and checked against live state. herdr calls go through a fixed allowlist;
-  client JSON is never forwarded.
-
-See [SECURITY.md](SECURITY.md) for the threat model and how to report issues.
-
-## Requirements
-
-- NixOS (x86_64-linux or aarch64-linux).
-- A DNS name for the host that the phone can resolve, e.g. a Tailscale
-  MagicDNS name. WebAuthn needs a domain name, not an IP. **Passkeys are bound
-  to this name**: pick it once.
-- A certificate for that name that the phone trusts: from your own CA (install
-  and fully trust its root on the phone) or from ACME with a DNS challenge.
-  For iOS the leaf needs a SAN, EKU serverAuth and at most 825 days validity.
-- A secrets manager for the runtime secrets (sops-nix, agenix, or plain files).
+- **See every agent at a glance**: which [herdr](https://herdr.dev) agent is
+  working, done or needs you, with its last lines of output, plus your tmux
+  sessions.
+- **Jump in**: a full-screen terminal attached to the agent, tmux session or a
+  shell, with a key bar made for thumbs (Esc, Tab, sticky Ctrl/Alt, arrows,
+  Enter, paste).
+- **Just say it**: tap the mic and talk. whisper.cpp transcribes on your own
+  machine while you speak; pause, and it types the text and presses Enter.
+- **Know when they finish**: push notifications when an agent needs you or is
+  done, even with the app closed. Tap one to open that agent.
+- **Yours**: it runs as your user on your machine. Passkey login (Face ID),
+  one-time QR enrollment, reachable only on your tailnet. No accounts, no
+  telemetry, no CDN.
 
 ## Quick start
 
-Add the input:
+### Any Linux machine with Nix and Tailscale
+
+1. In the Tailscale admin console, turn on **MagicDNS** and **HTTPS
+   certificates** (DNS page).
+2. Once, let your user manage `tailscale serve`:
+   `sudo tailscale set --operator=$USER`
+3. Run it:
+
+   ```sh
+   nix run github:fluxoz/pasture
+   # or, with the mic button (whisper.cpp on the CPU):
+   nix run github:fluxoz/pasture#pasture-dictation
+   ```
+
+   It finds your machine's `*.ts.net` name, serves itself there with
+   `tailscale serve`, and prints a QR code.
+4. Scan the QR code with your phone's camera, open the link, tap **Create
+   passkey**. Then Share → **Add to Home Screen**, open the app, tap **Unlock**.
+
+To keep it running, use the home-manager module. `pasture enroll` prints a
+new one-time QR code for another device.
+
+### home-manager (Linux)
 
 ```nix
-inputs.pasture = {
-  url = "github:<owner>/pasture";
-  inputs.nixpkgs.follows = "nixpkgs";
-};
-```
+# flake inputs
+inputs.pasture.url = "github:fluxoz/pasture";
 
-Then a host module like [examples/tailnet-host.nix](examples/tailnet-host.nix):
-
-```nix
-{ inputs, config, ... }:
+# your home configuration
+{ inputs, ... }:
 {
-  imports = [ inputs.pasture.nixosModules.default ];
-
+  imports = [ inputs.pasture.homeManagerModules.default ];
   services.pasture = {
     enable = true;
-    user = "alice";
-    hostName = "myhost.example.ts.net";
-    listenAddresses = [ "100.64.0.10" ];        # your `tailscale ip -4`
-    nonlocalBind = true;
-    nginx.after = [ "tailscaled.service" ];
-    allowedCIDRs = [ "100.64.0.0/10" ];
-    firewall.interfaces = [ config.services.tailscale.interfaceName ];
-
-    tls.certFile = ./certs/myhost.pem;
-    tls.keyFile = "/run/secrets/pasture-tls-key";      # owned by nginx
-    secrets = {
-      sessionKeyFile = "/run/secrets/pasture-session-key";    # owned by alice
-      enrollTokenFile = "/run/secrets/pasture-enroll-token";  # owned by alice
-      credentialsFile = "/run/secrets/pasture-credentials";   # owned by alice, "[]" at first
-    };
-    enrollment.enable = true;   # only until your passkey is enrolled
+    # dictation = true;   # bundle whisper.cpp (CPU) and the base.en model
   };
 }
 ```
 
-Generate the secrets, for example:
+It runs `pasture serve` as a systemd user service. Run
+`loginctl enable-linger $USER` so it keeps running while you are logged out,
+and `pasture enroll` for the QR code.
 
-```sh
-head -c 64 /dev/urandom | base64 -w0          # session key
-head -c 32 /dev/urandom | basenc --base64url  # enrollment token
-echo '[]'                                     # credentials, before enrollment
+### NixOS
+
+```nix
+# flake inputs
+inputs.pasture = {
+  url = "github:fluxoz/pasture";
+  inputs.nixpkgs.follows = "nixpkgs";
+};
+
+# a host module
+{ inputs, ... }:
+{
+  imports = [ inputs.pasture.nixosModules.default ];
+  services.tailscale.enable = true;
+  services.pasture = {
+    enable = true;
+    user = "alice";
+    hostName = "myhost.your-tailnet.ts.net"; # this machine's MagicDNS name
+  };
+}
 ```
 
-[examples/acme-host.nix](examples/acme-host.nix) shows the same with a
-Let's Encrypt certificate via `security.acme`.
+Deploy, then run `pasture-enroll` as `alice` for the QR code.
+[examples/agents-host.nix](examples/agents-host.nix) adds herdr and GPU
+dictation; [examples/tailnet-host.nix](examples/tailnet-host.nix) serves with
+nginx and your own certificate instead of `tailscale serve`, so the host name
+never appears in Certificate Transparency logs.
 
-## Enrollment
+## On the phone
 
-1. Set `enrollment.enable = true`, deploy.
-2. On the host, as `user`, run `pasture-enroll`. It prints a QR code of
-   `https://<hostName>/enroll#t=<token>`; the token is in the fragment, so the
-   browser never sends it to the server.
-3. Scan it with the phone's camera and open the link. The token is filled in;
-   tap **Create passkey** and confirm with Face ID. You are logged in.
-   (No camera handy: open `https://<hostName>/` and paste the token instead.)
-4. Install the app: Share → **Add to Home Screen**, open it, tap **Unlock**.
-   Home-screen apps have their own cookie jar, so they log in once on their
-   own; the passkey itself is shared through iCloud Keychain.
-5. The gateway logs the new credential as one JSON line
-   (`journalctl --user -u pasture`) and keeps it in
-   `~/.local/state/pasture/enrolled.json` while enrollment is on.
-6. Copy that JSON object into your credentials secret (a JSON list), set
-   `enrollment.enable = false`, rotate the enrollment token, deploy. From then
-   on only the declared passkeys work and `/enroll` is a 404.
+- **Enroll**: scan the QR code, open the link in Safari, tap Create passkey.
+  The code works once.
+- **Install**: Share → Add to Home Screen. The installed app keeps its own
+  cookies, so it asks you to Unlock once; the passkey itself is shared.
+- **Notifications**: ⋮ → Push notifications (iOS 16.4+ in the installed app,
+  or Android Chrome). Choose "needs you" and/or "finishes", then Send a test.
+- **Dictation**: the round mic at the right of the key bar. Tap to start, or
+  hold while you talk. In a terminal's ⋮ menu: how long a pause ends the
+  recording (0.6 to 2.5 s, or off) and whether it then presses Enter.
 
-The token works once: after the first enrollment `pasture-enroll` says so. To
-add another device later, rotate the token, redeploy and run it again.
+Tested on iPhone. Android should work (Chrome has passkeys, Web Push and
+AudioWorklet) but is untested.
 
-## Options
+## Works with
 
-All options live under `services.pasture`. Required: `user`, `hostName`,
-`listenAddresses`, `tls.certFile` + `tls.keyFile` (or `tls.acmeHost`) and the
-three `secrets.*` paths.
+- **[herdr](https://herdr.dev)** for the agent dashboard: any agent herdr
+  tracks (Claude Code, Codex, ...). Its status changes drive the badges and
+  push notifications. Without herdr you get tmux sessions and shells.
+- **tmux**: list, attach, create in a project directory, rename, kill.
+- **Plain shells**: your login shell.
+- **ntfy** (optional): an inbox fed by a topic on the same machine, also
+  forwarded as push notifications.
+
+## Security and privacy
+
+pasture gives whoever unlocks it **a shell as your user**. It is built for one
+owner on a private network. Read [SECURITY.md](SECURITY.md).
+
+- **Tailnet only.** `tailscale serve` (never `funnel`) or nginx bound to your
+  tailnet address. If you share the tailnet, limit the port to your own
+  devices with Tailscale ACLs.
+- **Passkeys**: exact origin and RP ID checks, user verification required,
+  single-use 120 s challenges. Enrollment codes are one-time and travel in the
+  URL fragment, which browsers never send to a server.
+- **Sessions**: `__Host-` cookie (Secure, HttpOnly, SameSite=Strict), 30 min
+  idle and 8 h absolute, in memory. Every POST and WebSocket checks `Origin`;
+  strict CSP; terminals run a fixed command per target kind.
+- **What leaves the machine**: with `tailscale serve`, the machine's `ts.net`
+  name appears in public Certificate Transparency logs (the nginx frontend
+  with your own certificate avoids that). Push notifications go through the
+  phone's push service (Apple's for an iPhone), encrypted end to end, so it
+  sees only size and timing. Nothing else: dictation audio stays on the
+  machine, and fonts and xterm.js are bundled.
+
+## Requirements
+
+- Linux (x86_64 or aarch64) with Nix, or NixOS. macOS is untested.
+- Tailscale with MagicDNS and HTTPS certificates, or the nginx frontend with a
+  certificate your phone trusts.
+- A phone browser with passkeys. Push needs iOS 16.4+ with the app installed.
+- Fast dictation wants a GPU build of whisper.cpp (Vulkan or CUDA): the text
+  lands about 50 ms after you pause. On a fast CPU it is about half a second.
+
+## Configuration
+
+### NixOS options
+
+All under `services.pasture`; only `enable`, `user` and `hostName` are required.
 
 | Option | Default | Notes |
 |---|---|---|
-| `enable` | `false` | |
 | `user` | required | Account whose shells are served; the gateway is its user unit. |
-| `linger` | `true` | So the user unit runs without a login. |
-| `hostName` | required | nginx server name, WebAuthn RP ID, origin. Must contain a dot. |
-| `listenAddresses` | required | nginx listen IPs; wildcards need `allowWildcardListen`. |
-| `allowWildcardListen` | `false` | |
+| `hostName` | required | The name the phone uses: WebAuthn RP ID and origin. Passkeys are bound to it. |
+| `frontend` | `"tailscale"` | `"tailscale"` (`tailscale serve`, needs `services.tailscale.enable`) or `"nginx"`. |
+| `listenAddresses` | `[ ]` | nginx: listen IPs; wildcards need `allowWildcardListen`. |
 | `listenPort` / `backendPort` | `443` / `8795` | The gateway binds 127.0.0.1 only. |
-| `allowedCIDRs` | `[ ]` | `allow …; deny all;` in the vhost when set. |
-| `firewall.interfaces` | `[ ]` | Opens `listenPort` on these interfaces only. |
-| `nonlocalBind` | `false` | `ip_nonlocal_bind=1`, for addresses that appear after boot. |
-| `nginx.after` | `[ ]` | e.g. `[ "tailscaled.service" ]`. |
-| `tls.certFile` / `tls.keyFile` / `tls.acmeHost` | `null` | |
-| `secrets.sessionKeyFile` / `enrollTokenFile` / `credentialsFile` | required | Runtime paths, readable by `user`. |
-| `enrollment.enable` | `false` | |
+| `allowedCIDRs` / `firewall.interfaces` | `[ ]` | nginx: allowed client networks; interfaces that get `listenPort`. |
+| `nonlocalBind` / `nginx.after` | `false` / `[ ]` | nginx: bind an address that appears after boot (start after `tailscaled.service`). |
+| `tls.certFile` / `tls.keyFile` / `tls.acmeHost` | `null` | nginx: your certificate. |
+| `secrets.sessionKeyFile` / `enrollTokenFile` / `credentialsFile` | `null` | Optional; without them the gateway keeps its own in its state dir. |
+| `enrollment.enable` | `credentialsFile == null` | With a credentials secret, turn it off to allow only those passkeys. |
+| `push.enable` / `push.subject` | `true` / `null` | Web Push; nothing is sent until a device turns it on. |
 | `session.idleMinutes` / `absoluteMinutes` | `30` / `480` | |
-| `webauthn.rpName` / `webauthn.userName` | `"pasture"` / `"owner"` | Shown in the passkey sheet. |
-| `appName` / `shortName` | `"pasture"` | Manifest and home-screen label. |
-| `shell.enable` / `shell.command` | `true` / `null` | `null` = login shell with `-l`. |
-| `tmux.enable` / `tmux.package` / `tmux.defaultSession` | `true` / `pkgs.tmux` / `null` | |
-| `herdr.package` | `null` | `null` disables everything herdr. |
-| `herdr.sessions` / `herdr.agentKinds` / `herdr.prefixKey` | `[ "default" ]` / `[ ]` / `"ctrl+b"` | |
-| `projectRoots` | `[ "~" ]` | Allowed working directories for new sessions/agents. |
-| `alerts.ntfy.url` / `alerts.ntfy.topic` | `null` / `"agents"` | |
-| `dictation.enable` / `package` / `model` | `false` / `pkgs.whisper-cpp` / `null` | `model` is required when enabled. |
-| `dictation.language` / `threads` / `maxSeconds` / `ffmpegPackage` | `"en"` / `4` / `60` / `pkgs.ffmpeg-headless` | ffmpeg only decodes uploads from browsers without AudioWorklet. |
-| `dictation.idleMinutes` / `prompt` / `extraArgs` | `0` / `null` / `[ ]` | Unload after this long unused (0 = keep loaded from boot); whisper's initial prompt; extra `whisper-server` flags. |
-| `theme.palette` | bundled "pasture dark" | See [nix/themes/schema.md](nix/themes/schema.md). |
-| `theme.fonts` | `null` | `{ family; regular; bold; }`; `null` = JetBrainsMono Nerd Font Mono. |
-| `webPackage` | `mkWeb` of the above | Replace the whole frontend. |
+| `appName` / `shortName` | `"pasture"` | Home-screen label. |
+| `shell.enable` / `shell.command` | `true` / `null` | `null` = login shell. |
+| `tmux.enable` / `tmux.defaultSession` | `true` / `null` | |
+| `herdr.package` / `sessions` / `agentKinds` / `prefixKey` | `null` / `[ "default" ]` / `[ ]` / `"ctrl+b"` | `null` disables herdr. |
+| `projectRoots` | `[ "~" ]` | Where new sessions and agents may start. |
+| `alerts.ntfy.url` / `topic` | `null` / `"agents"` | |
+| `dictation.enable` / `package` / `model` | `false` / `pkgs.whisper-cpp` / `null` | Use `whisper-cpp-vulkan` (or a CUDA build) for speed. |
+| `dictation.idleMinutes` / `prompt` / `extraArgs` | `0` / `null` / `[ ]` | 0 keeps the model loaded from boot; whisper's initial prompt; extra `whisper-server` flags. |
+| `dictation.language` / `threads` / `maxSeconds` | `"en"` / `4` / `60` | |
+| `theme.palette` / `theme.fonts` | "pasture dark" / JetBrains Mono | Any palette ([schema](nix/themes/schema.md)) and Nerd Font. |
 | `extraEnvironment` | `{ }` | Extra gateway (and shell) environment. |
 
-## iOS notes
+### The `pasture` command
 
-- Safari and the installed app do not share cookies: after enrolling in
-  Safari (the QR code opens there), the installed app needs one Unlock.
-- With a private CA: install its root as a profile and turn it on under
-  Settings → General → About → Certificate Trust Settings.
-- The iOS keyboard's own dictation may send audio to Apple. The app's mic
-  button records locally and transcribes on your host.
-- The app badge shows blocked + finished agents where iOS allows it.
-- Lock-screen notifications are out of scope (Web Push on iOS goes through
-  Apple's servers); the ntfy app covers that.
-
-## herdr and ntfy
-
-With `herdr.package` set, the gateway talks to herdr's JSON socket API
-(`~/.config/herdr/herdr.sock` and named sessions) as your user. It subscribes
-to events and re-reads the session snapshot on each one. "Mark seen" uses
-herdr's focus, which is shared server state: it also moves the focus of a
-desktop TUI attached to the same session.
-
-With `alerts.ntfy.url` set, the inbox shows the last hour of messages on the
-topic. Titles of the form `"<agent> - <project> (<host>)"` are matched to the
-agent pane whose working directory is `<project>`.
+`pasture serve` (the default) takes `--host` (default: the MagicDNS name),
+`--port`, `--https-port`, `--name`, `--state` and `--no-tailscale-serve`.
+`pasture enroll [--new]` prints the QR code. tmux, herdr and `whisper-server`
+are used when they are on `PATH`; `PASTURE_*` environment variables (see
+[gateway/pasture/config.py](gateway/pasture/config.py)) set the rest.
 
 ## Troubleshooting
 
-- **Passkey prompt never appears / "operation is insecure"**: the page has a
-  certificate problem or the host name is an IP. WebAuthn needs a trusted
-  HTTPS origin with a domain name.
-- **nginx fails at boot with "cannot assign requested address"**: the listen
-  address is not up yet (Tailscale). Set `nonlocalBind = true` and
-  `nginx.after = [ "tailscaled.service" ]`.
-- **Logged out after a deploy**: sessions live in memory; restarting the
-  gateway logs out. Unlock again.
-- **Gateway logs**: `journalctl --user -u pasture -f`; health:
-  `curl -s http://127.0.0.1:8795/healthz` (loopback only; shows certificate
-  days left).
+- **"tailscale serve needs permission"**: run
+  `sudo tailscale set --operator=$USER` once.
+- **The passkey prompt never appears**: the page needs a trusted HTTPS origin
+  with a domain name. Check that HTTPS certificates are on for the tailnet.
+- **Logged out after an update**: sessions live in memory; unlock again.
+- **Logs**: `journalctl --user -u pasture -f`. Each recording logs its timings
+  (never audio or text).
 
 ## Development
 
 ```sh
-nix develop                     # Python with aiohttp + webauthn
+nix develop
 cd gateway && python -m unittest discover -s tests -t . -v
+nix build .#gateway .#web .#pasture   # the gateway's tests run here too
 ```
 
-Build the web bundle by hand (any theme JSON, any font file, an unpacked
-xterm vendor directory as produced by `nix/vendor.nix`):
+Layout: `gateway/` (Python: auth, sessions, providers, PTY bridge, dictation,
+push, the `pasture` command), `web/` (vanilla ES modules, one stylesheet, the
+bundle builder), `nix/` (packages, theme, NixOS and home-manager modules),
+`examples/`.
 
-```sh
-python3 web/build.py --src web --theme theme.json --vendor <xterm-dir> \
-  --font-regular Font-Regular.ttf --font-bold Font-Bold.ttf --out /tmp/pasture-web
-```
+## License and credits
 
-Run a gateway against it on plain HTTP for local work (dev only; the origin
-override disables Secure cookies):
-
-```sh
-PASTURE_HOST=localhost PASTURE_ORIGIN=http://localhost:8795 \
-PASTURE_STATIC=/tmp/pasture-web PASTURE_STATE_DIR=/tmp/pasture-state \
-PASTURE_SESSION_KEY_FILE=./key PASTURE_ENROLL_TOKEN_FILE=./token \
-PASTURE_CREDENTIALS_FILE=./creds PASTURE_ENROLL=1 \
-PASTURE_TMUX=$(command -v tmux) python -m pasture
-```
-
-Layout: `gateway/` (Python: auth, sessions, providers, PTY bridge, dictation),
-`web/` (vanilla ES modules, one stylesheet, the bundle builder), `nix/`
-(packages, theme, module), `examples/`.
-
-Future work: non-NixOS packaging (container, Homebrew).
-
-## License
-
-MIT. Bundled at build time: xterm.js and addons (MIT), your chosen fonts
-(JetBrains Mono and Nerd Fonts are OFL-1.1 / MIT).
+MIT. Bundled at build time: xterm.js and addons (MIT), JetBrains Mono and the
+Nerd Fonts symbols (OFL-1.1 / MIT). The demo video's voice was synthesized
+with [Piper](https://github.com/OHF-Voice/piper1-gpl) using the
+`en_US-libritts_r` voice, trained on LibriTTS-R (CC BY 4.0).

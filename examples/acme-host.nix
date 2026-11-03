@@ -21,6 +21,7 @@
 
   services.pasture = {
     enable = true;
+    frontend = "nginx";
     user = "alice";
     hostName = "term.example.com"; # resolves to a private address, e.g. via your VPN's DNS
     listenAddresses = [ "10.0.0.5" ];
