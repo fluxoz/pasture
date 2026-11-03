@@ -29,6 +29,7 @@ export class KeyBar {
   setPrefix(bytes) {
     this.prefix = bytes || null;
     this.prefixBtn.hidden = !this.prefix;
+    this.fade?.();
   }
 
   /** Apply sticky modifiers to text typed on the soft keyboard. */
@@ -113,7 +114,8 @@ export class KeyBar {
 
   render() {
     const k = (label, seq, opts = {}) => this.button(label, { down: () => this.sendKey(seq), ...opts });
-    const arrow = (label, dir) => this.button(label, { down: () => this.arrow(dir), repeat: true, aria: dir });
+    const arrow = (dir) => this.button(glyph(G[dir]), { down: () => this.arrow(dir), repeat: true, aria: dir });
+    const group = (...keys) => el('div', { class: 'kgroup' }, ...keys.filter(Boolean));
     this.ctrlBtn = this.button('ctrl', { cls: 'key mod', down: () => this.toggleMod('ctrl') });
     this.altBtn = this.button('alt', { cls: 'key mod', down: () => this.toggleMod('alt') });
     this.prefixBtn = this.button('pfx', {
@@ -121,11 +123,11 @@ export class KeyBar {
       aria: 'multiplexer prefix',
       down: () => this.prefix && this.hooks.send(this.prefix),
     });
-    this.prefixBtn.hidden = true;
+    this.prefixBtn.hidden = !this.prefix;
     this.micBtn = null;
     if (this.hooks.dictation) {
       // Tap to start/stop, or hold to talk: the app decides on release.
-      const mic = el('button', { class: 'key mic', type: 'button', 'aria-label': 'dictate' }, glyph(G.mic), el('span', { class: 'time' }));
+      const mic = el('button', { class: 'mic', type: 'button', 'aria-label': 'dictate' }, glyph(G.micLine), el('span', { class: 'time' }));
       mic.addEventListener('pointerdown', (e) => {
         e.preventDefault();
         vibrate(6);
@@ -135,29 +137,36 @@ export class KeyBar {
       mic.addEventListener('contextmenu', (e) => e.preventDefault());
       this.micBtn = mic;
     }
-    const row = [
-      k('esc', '\x1b', { cls: 'key mod' }),
-      k('tab', '\t', { cls: 'key mod' }),
-      this.ctrlBtn,
-      this.altBtn,
-      arrow('←', 'left'),
-      arrow('↓', 'down'),
-      arrow('↑', 'up'),
-      arrow('→', 'right'),
-      this.prefixBtn,
-      k('|', '|'),
-      k('~', '~'),
-      k('/', '/'),
-      k('-', '-'),
-      k('_', '_'),
-      k('⇞', '\x1b[5~', { repeat: true, aria: 'page up' }),
-      k('⇟', '\x1b[6~', { repeat: true, aria: 'page down' }),
-      k('^C', '\x03', { cls: 'key mod' }),
-      this.button(glyph(G.paste), { aria: 'paste', click: () => this.hooks.paste() }),
-      this.button(glyph(G.keyboard), { aria: 'hide keyboard', click: () => this.hooks.blur() }),
-    ].filter(Boolean);
-    this.host.replaceChildren(...row);
+    this.host.replaceChildren(
+      group(k('esc', '\x1b', { cls: 'key mod' }), k('tab', '\t', { cls: 'key mod' })),
+      group(this.ctrlBtn, this.altBtn, this.prefixBtn),
+      group(arrow('left'), arrow('down'), arrow('up'), arrow('right')),
+      group(k('^C', '\x03', { cls: 'key mod', aria: 'control C' })),
+      group(k('|', '|'), k('~', '~'), k('/', '/'), k('-', '-'), k('_', '_')),
+      group(
+        k(glyph(G.pgUp), '\x1b[5~', { repeat: true, aria: 'page up' }),
+        k(glyph(G.pgDn), '\x1b[6~', { repeat: true, aria: 'page down' }),
+      ),
+      group(
+        this.button(glyph(G.clip), { aria: 'paste', click: () => this.hooks.paste() }),
+        this.button(glyph(G.kbdHide), { aria: 'hide keyboard', click: () => this.hooks.blur() }),
+      ),
+    );
     this.end?.replaceChildren(...[this.micBtn].filter(Boolean));
+    this.paintMods();
+    // Fade whichever edge has more keys behind it.
+    const fade = () => {
+      const h = this.host;
+      h.classList.toggle('more-left', h.scrollLeft > 2);
+      h.classList.toggle('more-right', h.scrollLeft + h.clientWidth < h.scrollWidth - 2);
+    };
+    this.fade = fade;
+    this.host.onscroll = fade;
+    requestAnimationFrame(fade);
+    if (!this.resizeWatch) {
+      this.resizeWatch = new ResizeObserver(fade);
+      this.resizeWatch.observe(this.host);
+    }
   }
 }
 

@@ -6,8 +6,8 @@ import { initViewport, onViewport } from './viewport.js';
 import { Dashboard } from './dashboard.js';
 import { TermView } from './term.js';
 import { KeyBar } from './keys.js';
-import { Recorder } from './dictate.js';
-import { openSheet, closeSheet, item, items } from './sheet.js';
+import { Recorder, primeAudio } from './dictate.js';
+import { openSheet, closeSheet, item, items, tiles, tile, section, toggle, choice, stepper } from './sheet.js';
 import { $, el, G, toast, storage, store, vibrate } from './util.js';
 
 const app = $('#app');
@@ -142,6 +142,8 @@ async function enterApp() {
     keybar.hooks.dictation = true;
     keybar.render();
     dash.hooks.dictateInto = toggleDictation;
+    // iOS starts audio only from a tap's end: get it ready on every tap.
+    for (const ev of ['pointerup', 'touchend', 'keydown']) document.addEventListener(ev, primeAudio, { capture: true, passive: true });
   }
   dash.setConfig(config);
   dash.update(data.state);
@@ -267,34 +269,63 @@ function termMenu() {
       .then(() => toast(`${what} copied`))
       .catch(() => toast('Clipboard not available', { error: true }));
   const found = t.k === 'agent' ? dash.findPane(t.s, t.t) : null;
+  const size = () => term.term.options.fontSize;
   openSheet({
     title: t.title || t.k,
     sub: { agent: `herdr agent · ${t.t}`, herdr: `herdr · ${t.s || 'default'}`, tmux: 'tmux session', shell: 'login shell' }[t.k],
     body: [
-      items(
-        sel && item({ icon: G.copy, label: 'Copy selection', onSelect: () => copy(sel, 'Selection') }),
-        item({ icon: G.copy, label: 'Copy screen', onSelect: () => copy(term.screenText(), 'Screen') }),
-        found && item({ icon: G.eye, label: 'Mark seen (focuses it in herdr)', onSelect: () => api('/api/action', { method: 'POST', body: { op: 'focus', session: t.s, target: t.t } }).catch((e) => toast(e.message, { error: true })) }),
-        found && item({ icon: G.send, label: 'Prompt…', onSelect: () => dash.promptSheet(t.s, found.p) }),
-        item({ icon: '', label: 'Larger text', close: false, onSelect: () => term.setFontSize(term.term.options.fontSize + 1) }),
-        item({ icon: '', label: 'Smaller text', close: false, onSelect: () => term.setFontSize(term.term.options.fontSize - 1) }),
-        item({ icon: G.refresh, label: t.k === 'shell' ? 'New shell' : 'Reconnect', onSelect: () => term.reconnect() }),
-        item({
-          icon: G.term,
-          label: storage('renderer', 'dom') === 'webgl' ? 'Use DOM renderer' : 'Use WebGL renderer',
-          onSelect: () => {
-            store('renderer', storage('renderer', 'dom') === 'webgl' ? 'dom' : 'webgl');
+      tiles(
+        sel && tile({ icon: G.copy, label: 'Copy selection', onSelect: () => copy(sel, 'Selection') }),
+        tile({ icon: G.copy, label: 'Copy screen', onSelect: () => copy(term.screenText(), 'Screen') }),
+        found && tile({ icon: G.send, label: 'Prompt', onSelect: () => dash.promptSheet(t.s, found.p) }),
+        found &&
+          tile({
+            icon: G.eye,
+            label: 'Mark seen',
+            onSelect: () => api('/api/action', { method: 'POST', body: { op: 'focus', session: t.s, target: t.t } }).catch((e) => toast(e.message, { error: true })),
+          }),
+        tile({ icon: G.refresh, label: t.k === 'shell' ? 'New shell' : 'Reconnect', onSelect: () => term.reconnect() }),
+      ),
+      config?.dictation &&
+        section(
+          'Dictation',
+          choice({
+            icon: G.timer,
+            label: 'Stop when I pause',
+            options: PAUSES,
+            value: storage('dictatePause', '1'),
+            onChange: (v) => store('dictatePause', v),
+          }),
+          toggle({
+            icon: G.enter,
+            label: 'Then press Enter (send)',
+            value: storage('dictateSend', '1') === '1',
+            onChange: (on) => store('dictateSend', on ? '1' : '0'),
+          }),
+        ),
+      section(
+        'Display',
+        stepper({
+          icon: G.textSize,
+          label: 'Text size',
+          value: size(),
+          onStep: (d) => {
+            term.setFontSize(size() + d);
+            return size();
+          },
+        }),
+        toggle({
+          icon: G.monitor,
+          label: 'WebGL renderer',
+          value: storage('renderer', 'dom') === 'webgl',
+          onChange: (on) => {
+            store('renderer', on ? 'webgl' : 'dom');
+            closeSheet();
             openTerm(t);
           },
         }),
-        config?.dictation &&
-          item({
-            icon: G.mic,
-            label: storage('dictateEnter', '0') === '1' ? 'Dictation: stop pressing Enter' : 'Dictation: press Enter after',
-            onSelect: () => store('dictateEnter', storage('dictateEnter', '0') === '1' ? '0' : '1'),
-          }),
-        item({ icon: G.close, label: 'Close terminal', onSelect: () => closeTerm() }),
       ),
+      items(item({ icon: G.close, label: 'Close terminal', danger: true, onSelect: () => closeTerm() })),
     ],
   });
 }
@@ -324,13 +355,21 @@ function dashMenu() {
 // -- dictation ---------------------------------------------------------------
 
 // Tap the mic to start and again to stop, or hold it while talking and let go.
-// Partial text shows while you speak; the final text goes to the sink.
+// Partial text shows while you speak. With auto-stop on, a pause after speech
+// ends the recording; "send" also presses Enter. Both are per-device settings.
 
 const HOLD_MS = 350;
 const dict = { state: 'idle', btn: null, sink: null, pressedAt: 0, stopOnRelease: false }; // idle | starting | recording | finishing
 
+const PAUSES = [['0', 'Off'], ['0.6', '0.6s'], ['1', '1s'], ['1.5', '1.5s'], ['2.5', '2.5s']];
+const dictSettings = () => ({
+  pauseMs: Number(storage('dictatePause', '1')) * 1000 || 0,
+  send: storage('dictateSend', '1') === '1',
+});
+
 function micDown(btn, sink) {
   if (dict.state === 'recording') dict.stopOnRelease = true;
+  else if (dict.state === 'starting') cancelDictation(); // a tap while starting gives up
   if (dict.state !== 'idle') return;
   dict.pressedAt = Date.now();
   dict.stopOnRelease = false;
@@ -344,6 +383,7 @@ function micUp() {
 
 function toggleDictation(btn, sink) {
   if (dict.state === 'recording') finishDictation();
+  else if (dict.state === 'starting') cancelDictation();
   else if (dict.state === 'idle') startDictation(btn, sink);
 }
 
@@ -353,14 +393,18 @@ function setMicTime(btn, s) {
 }
 
 async function startDictation(btn, sink) {
-  Object.assign(dict, { state: 'starting', btn, sink });
+  const settings = dictSettings();
+  Object.assign(dict, { state: 'starting', btn, sink, settings });
   btn.classList.add('rec');
-  sink.begin?.();
+  sink.begin?.(settings);
   try {
     await recorder.start({
+      pauseMs: settings.pauseMs,
       onTick: (s) => setMicTime(btn, s),
       onLimit: () => dict.state === 'recording' && finishDictation(),
       onPartial: (text) => dict.sink === sink && sink.partial?.(text),
+      onPause: () => dict.state === 'recording' && finishDictation(),
+      onPauseProgress: (f) => sink.pause?.(f),
       onLevel: (v) => {
         const level = Math.min(1, v * 2.5).toFixed(2);
         btn.style.setProperty('--level', level);
@@ -368,12 +412,11 @@ async function startDictation(btn, sink) {
       },
       onError: (e) => {
         if (dict.state !== 'recording') return;
-        recorder.cancel();
-        endDictation();
+        cancelDictation();
         toast(explain(e), { error: true });
       },
     });
-    if (dict.state !== 'starting') return; // cancelled meanwhile
+    if (dict.state !== 'starting' || dict.btn !== btn) return; // cancelled meanwhile
     dict.state = 'recording';
     vibrate(10);
   } catch (e) {
@@ -383,14 +426,14 @@ async function startDictation(btn, sink) {
 }
 
 async function finishDictation() {
-  const { btn, sink } = dict;
+  const { btn, sink, settings } = dict;
   dict.state = 'finishing';
   btn.classList.remove('rec');
   btn.classList.add('busy');
   sink.busy?.();
   try {
     const text = await recorder.stop();
-    if (text) sink.done(text);
+    if (text) sink.done(text, settings);
     else toast('Heard nothing');
   } catch (e) {
     toast(explain(e), { error: true });
@@ -399,29 +442,39 @@ async function finishDictation() {
   }
 }
 
+function cancelDictation() {
+  recorder.cancel();
+  endDictation();
+}
+
 function endDictation() {
   const { btn, sink } = dict;
   btn?.classList.remove('rec', 'busy');
   btn?.style.removeProperty('--level');
   setMicTime(btn, null);
   sink?.end?.();
-  Object.assign(dict, { state: 'idle', btn: null, sink: null });
+  Object.assign(dict, { state: 'idle', btn: null, sink: null, settings: null });
 }
 
 /** Dictating into the terminal: a live transcript over its bottom, then a paste. */
 const termSink = {
-  begin() {
-    $('#dictation').classList.remove('busy');
+  begin({ pauseMs, send }) {
+    const box = $('#dictation');
+    box.classList.remove('busy');
+    box.style.setProperty('--pause', 0);
     $('#dictation-text').textContent = '';
-    $('#dictation').hidden = false;
+    $('#dictation-hint').textContent = pauseMs
+      ? `Pause ${pauseMs / 1000}s to ${send ? 'send' : 'insert'}`
+      : `Tap the mic to ${send ? 'send' : 'insert'}`;
+    box.hidden = false;
   },
   partial: (text) => ($('#dictation-text').textContent = text),
   level: (v) => $('#dictation').style.setProperty('--level', v),
+  pause: (f) => $('#dictation').style.setProperty('--pause', f.toFixed(2)),
   busy: () => $('#dictation').classList.add('busy'),
-  done(text) {
-    const enter = storage('dictateEnter', '0') === '1';
-    term?.paste(enter ? text : `${text} `);
-    if (enter) term?.sendText('\r');
+  done(text, { send }) {
+    term?.paste(send ? text : `${text} `);
+    if (send) term?.sendText('\r');
   },
   end: () => ($('#dictation').hidden = true),
 };

@@ -1,7 +1,10 @@
-// AudioWorklet: microphone -> 16 kHz mono 16-bit PCM in 100 ms chunks, each
-// with its peak level for the meter. Downsampling averages the input samples
-// that fall into each output sample (a box filter): crude, but enough for
-// speech recognition. Post 'flush' to get the partial chunk at the end.
+// AudioWorklet: microphone -> 16 kHz mono 16-bit PCM in 50 ms chunks, each
+// with its peak and RMS level (for the meter and pause detection).
+// Downsampling averages the input samples that fall into each output sample
+// (a box filter): crude, but enough for speech recognition. Post 'flush' to
+// get the partial chunk at the end.
+
+const CHUNK = 800; // 50 ms at 16 kHz
 
 class Pcm16k extends AudioWorkletProcessor {
   constructor() {
@@ -10,17 +13,20 @@ class Pcm16k extends AudioWorkletProcessor {
     this.t = 0;
     this.sum = 0;
     this.n = 0;
-    this.buf = new Int16Array(1600);
+    this.buf = new Int16Array(CHUNK);
     this.len = 0;
     this.peak = 0;
+    this.energy = 0;
     this.port.onmessage = (e) => e.data === 'flush' && this.flush(true);
   }
 
   flush(last = false) {
     const pcm = this.buf.slice(0, this.len);
-    this.port.postMessage({ pcm: pcm.buffer, peak: this.peak, last }, [pcm.buffer]);
+    const rms = this.len ? Math.sqrt(this.energy / this.len) : 0;
+    this.port.postMessage({ pcm: pcm.buffer, peak: this.peak, rms, last }, [pcm.buffer]);
     this.len = 0;
     this.peak = 0;
+    this.energy = 0;
   }
 
   process(inputs) {
@@ -38,8 +44,9 @@ class Pcm16k extends AudioWorkletProcessor {
       v = v < -1 ? -1 : v > 1 ? 1 : v;
       const a = v < 0 ? -v : v;
       if (a > this.peak) this.peak = a;
+      this.energy += v * v;
       this.buf[this.len++] = v * 32767;
-      if (this.len === this.buf.length) this.flush();
+      if (this.len === CHUNK) this.flush();
     }
     return true;
   }

@@ -530,9 +530,10 @@ export class Dashboard {
           finished = false;
         },
         partial: (t) => (text.value = join(t)),
-        done(t) {
+        done(t, { send: andSend }) {
           text.value = join(t);
           finished = true;
+          if (andSend) send();
         },
         end: () => !finished && (text.value = base), // failed or heard nothing: undo the partials
       };

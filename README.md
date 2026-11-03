@@ -37,13 +37,14 @@ CDN, no push relay, no tunnel. Fonts and xterm.js are bundled at build time.
     project, rename, mark seen, send quick keys (Esc, Enter, y/n, 1-3, Ctrl-C),
     send a prompt, close a pane or workspace.
   - alerts: an inbox fed by an ntfy topic on the same host.
-- **Dictation** (optional): the mic sits at the right end of the key bar. Tap
-  to start and again to stop, or hold it while you talk. Audio streams to the
-  host as 16 kHz PCM; whisper.cpp's `whisper-server` (started on first use,
-  kept loaded, stopped after `idleMinutes` unused) shows partial text while
-  you talk and pastes the final text right after you stop. Pressing Enter
-  afterwards is a per-device toggle in the terminal menu. With a GPU build of
-  whisper.cpp a sentence takes well under 100 ms.
+- **Dictation** (optional): the round mic at the right end of the key bar.
+  Tap to start, or hold it while you talk. Audio streams to the host as
+  16 kHz PCM in 50 ms chunks to whisper.cpp's `whisper-server`, which the
+  gateway loads and warms at startup; partial text updates about ten times a
+  second while you talk. A pause (0.6-2.5 s, or off) ends the recording and
+  the text is typed, then Enter is pressed if "send" is on; both are
+  per-device settings in the terminal menu. With a GPU build of whisper.cpp
+  the text lands about 50 ms after the pause is detected.
 - **Themes**: any palette attrset (see [nix/themes/schema.md](nix/themes/schema.md))
   and any Nerd Font.
 
@@ -190,7 +191,7 @@ three `secrets.*` paths.
 | `alerts.ntfy.url` / `alerts.ntfy.topic` | `null` / `"agents"` | |
 | `dictation.enable` / `package` / `model` | `false` / `pkgs.whisper-cpp` / `null` | `model` is required when enabled. |
 | `dictation.language` / `threads` / `maxSeconds` / `ffmpegPackage` | `"en"` / `4` / `60` / `pkgs.ffmpeg-headless` | ffmpeg only decodes uploads from browsers without AudioWorklet. |
-| `dictation.idleMinutes` / `prompt` / `extraArgs` | `30` / `null` / `[ ]` | Unload after idle (0 = never); whisper's initial prompt; extra `whisper-server` flags. |
+| `dictation.idleMinutes` / `prompt` / `extraArgs` | `0` / `null` / `[ ]` | Unload after this long unused (0 = keep loaded from boot); whisper's initial prompt; extra `whisper-server` flags. |
 | `theme.palette` | bundled "pasture dark" | See [nix/themes/schema.md](nix/themes/schema.md). |
 | `theme.fonts` | `null` | `{ family; regular; bold; }`; `null` = JetBrainsMono Nerd Font Mono. |
 | `webPackage` | `mkWeb` of the above | Replace the whole frontend. |

@@ -23,7 +23,21 @@ export const G = {
   send: '',
   moon: '',
   hourglass: '',
-  question: '',
+  question: '',  left: '󰁍',
+  down: '󰁅',
+  up: '󰁝',
+  right: '󰁔',
+  pgUp: '󰄿',
+  pgDn: '󰄼',
+  kbdHide: '󰌏',
+  clip: '󰆒',
+  enter: '󰌑',
+  timer: '󰔛',
+  textSize: '󰉿',
+  minus: '󰍴',
+  plusBox: '󰐕',
+  micLine: '󰍬',
+  monitor: '󰍹',
 };
 
 export const $ = (sel, root = document) => root.querySelector(sel);

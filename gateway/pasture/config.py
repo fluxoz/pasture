@@ -100,7 +100,7 @@ class Config:
     dictate_language: str = "en"
     dictate_threads: int = 4
     dictate_max_seconds: int = 60
-    dictate_idle_minutes: float = 30.0  # stop the model after this long unused; 0 = keep it
+    dictate_idle_minutes: float = 0.0  # stop the model after this long unused; 0 = keep it loaded
     dictate_prompt: str = ""
     dictate_args: list[str] = field(default_factory=list)
 
@@ -185,7 +185,7 @@ def load() -> Config:
         dictate_language=_env("PASTURE_DICTATE_LANGUAGE", "en") or "en",
         dictate_threads=_int("PASTURE_DICTATE_THREADS", 4),
         dictate_max_seconds=_int("PASTURE_DICTATE_MAX_SECONDS", 60),
-        dictate_idle_minutes=_float("PASTURE_DICTATE_IDLE_MINUTES", 30.0),
+        dictate_idle_minutes=_float("PASTURE_DICTATE_IDLE_MINUTES", 0.0),
         dictate_prompt=_env("PASTURE_DICTATE_PROMPT", "") or "",
         dictate_args=dictate_args,
         cert_file=_path("PASTURE_CERT_FILE"),

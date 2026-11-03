@@ -64,7 +64,11 @@
 
     <section class="view" id="view-term">
       <div class="term-host" id="term-host"></div>
-      <div class="dictation" id="dictation" hidden><span class="dot"></span><p id="dictation-text"></p></div>
+      <div class="dictation" id="dictation" hidden>
+        <span class="dot"></span>
+        <div class="body"><p id="dictation-text"></p><p class="hint" id="dictation-hint"></p></div>
+        <span class="pausebar"></span>
+      </div>
       <div class="term-overlay" id="term-overlay" hidden>
         <p id="term-overlay-msg"></p>
         <button class="btn" id="term-reconnect" type="button">Reconnect</button>

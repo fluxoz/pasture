@@ -1,11 +1,15 @@
 """Local dictation: whisper.cpp's whisper-server, kept warm on loopback.
 
-The gateway starts the server on first use (the model loads while you are
-still talking), sends it 16 kHz mono 16-bit PCM as WAV, and stops it after
-`dictate_idle_minutes` without dictation, which frees the GPU memory.
+The gateway starts the server when it starts and warms it up (the first run
+compiles GPU kernels, which can take seconds), sends it 16 kHz mono 16-bit
+PCM as WAV, and restarts it if it dies. With `dictate_idle_minutes` > 0 it is
+stopped after that long unused, freeing its memory, and started again on the
+next recording.
 
 Browsers stream PCM over /ws/dictate and get partial transcripts while they
-record, then the final text right after they stop. /api/dictate takes a
+record (back to back: the next one starts as soon as there is 0.1 s of new
+audio, about ten a second on a GPU), then the final text right after they
+stop. /api/dictate takes a
 finished recording in any format ffmpeg reads, for browsers without
 AudioWorklet. Audio and text are never logged. The server answers one
 request at a time; partials skip a turn rather than queue.
@@ -39,8 +43,8 @@ BYTES_PER_SECOND = RATE * 2
 MAX_UPLOAD = 2 * 1024 * 1024
 TIMEOUT = 30.0  # one transcription
 START_TIMEOUT = 90.0  # model load plus the first run (shader compile on a new driver)
-PARTIAL_EVERY = 0.5  # seconds between partial transcripts
-PARTIAL_MIN_NEW = BYTES_PER_SECOND // 4  # new audio needed for another partial
+PARTIAL_MIN_NEW = BYTES_PER_SECOND // 10  # new audio (0.1 s) that triggers the next partial
+REVIVE_AFTER = 3.0  # seconds before restarting a server that died
 SILENCE_PEAK = 400  # of 32767: quieter clips are not sent to the model at all
 MAX_STREAMS = 3
 # whisper.cpp marks silence and noise like "[BLANK_AUDIO]" or "(wind blowing)".
@@ -93,6 +97,7 @@ class Dictation:
         self.idle: asyncio.TimerHandle | None = None
         self.stderr: collections.deque[str] = collections.deque(maxlen=30)
         self.streams = 0
+        self.closing = False
 
     @property
     def ready(self) -> bool:
@@ -109,6 +114,13 @@ class Dictation:
         self._touch()
         assert self.url is not None
         return self.url
+
+    async def warm(self) -> None:
+        """Start and warm up in the background (at gateway start); failures are only logged."""
+        try:
+            await self.ensure()
+        except DictationError:
+            pass  # _start logged why; the next recording tries again
 
     async def _start(self) -> None:
         await self._kill()
@@ -183,6 +195,10 @@ class Dictation:
             log.warning("dictation: whisper-server exited (%s)\n%s", code, self._errors())
             self.proc = None
             self.url = None
+            if self.cfg.dictate_idle_minutes <= 0 and not self.closing:
+                await asyncio.sleep(REVIVE_AFTER)
+                if not self.closing and self.proc is None:
+                    await self.warm()
 
     def _touch(self) -> None:
         if self.idle:
@@ -213,6 +229,7 @@ class Dictation:
             await proc.wait()
 
     async def close(self) -> None:
+        self.closing = True
         if self.idle:
             self.idle.cancel()
         if self.starting and not self.starting.done():
@@ -304,6 +321,9 @@ class Dictation:
         self.streams += 1
         pcm = bytearray()
         limit = self.cfg.dictate_max_seconds * BYTES_PER_SECOND
+        loop = asyncio.get_running_loop()
+        opened = loop.time()
+        stats = {"first_audio": None, "partials": 0, "final_ms": None, "ready_after": None}
 
         async def send(msg: dict) -> None:
             if not ws.closed:
@@ -315,6 +335,7 @@ class Dictation:
         async def warm() -> None:
             try:
                 await self.ensure()
+                stats["ready_after"] = loop.time() - opened
                 await send({"t": "ready"})
             except DictationError as e:
                 await send({"t": "error", "message": str(e)})
@@ -322,7 +343,8 @@ class Dictation:
         async def partials() -> None:
             done, last = 0, ""
             while True:
-                await asyncio.sleep(PARTIAL_EVERY)
+                await more.wait()
+                more.clear()
                 if not self.ready or len(pcm) - done < PARTIAL_MIN_NEW:
                     continue
                 n = len(pcm)
@@ -335,15 +357,21 @@ class Dictation:
                 done = n
                 if text != last:
                     last = text
+                    stats["partials"] += 1
                     await send({"t": "partial", "text": text})
 
+        more = asyncio.Event()  # set on new audio and when the model is ready
         warming = asyncio.create_task(warm())
+        warming.add_done_callback(lambda _: more.set())
         partial_task = asyncio.create_task(partials())
         final = False
         try:
             async for msg in ws:
                 if msg.type == aiohttp.WSMsgType.BINARY:
+                    if stats["first_audio"] is None:
+                        stats["first_audio"] = loop.time() - opened
                     pcm += msg.data[: max(0, limit - len(pcm))]
+                    more.set()
                     if len(pcm) >= limit:
                         final = True  # at the cap: transcribe what we have
                         break
@@ -359,8 +387,10 @@ class Dictation:
                     break
             partial_task.cancel()
             if final:
+                started = loop.time()
                 try:
                     text = await self.transcribe(bytes(pcm)) or ""
+                    stats["final_ms"] = round((loop.time() - started) * 1000)
                     await send({"t": "final", "text": text, "limit": len(pcm) >= limit})
                 except DictationError as e:
                     await send({"t": "error", "message": str(e)})
@@ -370,3 +400,18 @@ class Dictation:
             self.streams -= 1
             if not ws.closed:
                 await ws.close()
+            # Timings only, never audio or text: enough to see where a slow one went.
+            log.info(
+                "dictation: %s, %.1fs audio over %.1fs, first audio after %s, ready after %s, %d partials, final %s",
+                "done" if final else "cancelled",
+                len(pcm) / BYTES_PER_SECOND,
+                loop.time() - opened,
+                _secs(stats["first_audio"]),
+                _secs(stats["ready_after"]),
+                stats["partials"],
+                f"{stats['final_ms']}ms" if stats["final_ms"] is not None else "-",
+            )
+
+
+def _secs(value: float | None) -> str:
+    return "-" if value is None else f"{value:.2f}s"

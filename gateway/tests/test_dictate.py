@@ -136,3 +136,20 @@ class DictationTest(TempDir, unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(1.5)
         self.assertFalse(self.gateway.dictation.ready)
         self.assertIsNone(self.gateway.dictation.proc)
+
+    async def test_warm_at_start_and_revived_after_a_crash(self):
+        from pasture import dictate
+
+        self.addCleanup(setattr, dictate, "REVIVE_AFTER", dictate.REVIVE_AFTER)
+        dictate.REVIVE_AFTER = 0.2
+        d = self.gateway.dictation
+        async with asyncio.timeout(10):
+            while not d.ready:  # warmed at startup, before anyone records
+                await asyncio.sleep(0.05)
+        self.assertEqual(len(self.requests()), 1)
+        d.proc.kill()
+        await asyncio.sleep(0.3)
+        async with asyncio.timeout(10):
+            while not d.ready:
+                await asyncio.sleep(0.05)
+        self.assertEqual(len(self.requests()), 2)  # warmed up again

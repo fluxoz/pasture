@@ -1,6 +1,7 @@
-// Bottom sheets: action lists, forms, hold-to-confirm buttons.
+// Bottom sheets: action tiles, grouped lists, settings (switches, choices,
+// steppers), forms and hold-to-confirm buttons.
 
-import { $, el, glyph, vibrate } from './util.js';
+import { $, el, glyph, G, vibrate } from './util.js';
 
 let current = null;
 
@@ -81,6 +82,74 @@ export function item({ icon, label, danger = false, hold = false, onSelect, clos
 }
 
 export const items = (...rows) => el('div', { class: 'items' }, ...rows.filter(Boolean));
+
+/** A sheet's main actions as big icon tiles. */
+export const tiles = (...list) => el('div', { class: 'tiles' }, ...list.filter(Boolean));
+
+export function tile({ icon, label, onSelect, close = true }) {
+  const button = el('button', { class: 'tile', type: 'button' }, glyph(icon), el('span', { text: label }));
+  button.addEventListener('click', () => {
+    if (close) closeSheet();
+    onSelect?.();
+  });
+  return button;
+}
+
+/** A titled group of setting rows. */
+export const section = (title, ...rows) =>
+  el('section', { class: 'sheet-section' }, el('h3', { text: title }), el('div', { class: 'group' }, ...rows.filter(Boolean)));
+
+/** A setting with a switch; the sheet stays open. */
+export function toggle({ icon, label, value, onChange }) {
+  let on = !!value;
+  const row = el(
+    'button',
+    { class: 'setting', type: 'button', role: 'switch', 'aria-checked': String(on) },
+    glyph(icon),
+    el('span', { class: 'label', text: label }),
+    el('span', { class: 'switch', 'aria-hidden': 'true' }),
+  );
+  row.addEventListener('click', () => {
+    on = !on;
+    row.setAttribute('aria-checked', String(on));
+    vibrate(6);
+    onChange(on);
+  });
+  return row;
+}
+
+/** A setting with a segmented choice. options: [[value, label], ...] */
+export function choice({ icon, label, options, value, onChange }) {
+  const buttons = options.map(([v, text]) => {
+    const b = el('button', { type: 'button', class: v === value ? 'on' : '', text });
+    b.addEventListener('click', () => {
+      for (const x of buttons) x.classList.toggle('on', x === b);
+      vibrate(6);
+      onChange(v);
+    });
+    return b;
+  });
+  return el(
+    'div',
+    { class: 'setting stacked' },
+    el('div', { class: 'setting-head' }, glyph(icon), el('span', { class: 'label', text: label })),
+    el('div', { class: 'seg' }, ...buttons),
+  );
+}
+
+/** A setting with − value + buttons. onStep(delta) returns the new value. */
+export function stepper({ icon, label, value, onStep }) {
+  const out = el('span', { class: 'value', text: String(value) });
+  const step = (g, delta, aria) =>
+    el('button', { class: 'step', type: 'button', 'aria-label': aria, onclick: () => (out.textContent = String(onStep(delta))) }, glyph(g));
+  return el(
+    'div',
+    { class: 'setting' },
+    glyph(icon),
+    el('span', { class: 'label', text: label }),
+    el('div', { class: 'stepper' }, step(G.minus, -1, 'smaller'), out, step(G.plusBox, 1, 'larger')),
+  );
+}
 
 export function field(label, input) {
   return el('label', { class: 'field' }, el('span', { text: label }), input);

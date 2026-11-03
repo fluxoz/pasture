@@ -405,8 +405,11 @@ in
       };
       idleMinutes = mkOption {
         type = types.numbers.nonnegative;
-        default = 30;
-        description = "Stop whisper-server (freeing its memory) after this long without dictation; 0 keeps it loaded.";
+        default = 0;
+        description = ''
+          Stop whisper-server (freeing its memory) after this long without dictation.
+          0 keeps it loaded from boot, so the first word is as fast as the rest.
+        '';
       };
       prompt = mkOption {
         type = types.nullOr types.str;

@@ -562,6 +562,9 @@ class Gateway:
                     await provider.start()
                 except Exception:
                     log.exception("provider %s failed to start", provider.name)
+        if self.dictation is not None:
+            # Load and warm the model now, not on the first word someone says.
+            self._warming = asyncio.create_task(self.dictation.warm())
 
     async def on_cleanup(self, app: web.Application) -> None:
         for provider in (self.tmux, self.herdr, self.alerts):

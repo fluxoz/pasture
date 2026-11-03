@@ -54,7 +54,8 @@ SSH: one owner, a private network, and never the public internet.
   only to whisper-server on 127.0.0.1 (uploads from older browsers pass
   through a private temporary directory). Audio and text are never logged.
   While whisper-server runs, other local users can reach its loopback port;
-  on a shared machine leave dictation off or set `idleMinutes` low.
+  on a shared machine leave dictation off. With "send" on, a pause presses
+  Enter on whatever was heard: turn it off for shells where that matters.
 
 ## Reporting a vulnerability
 
