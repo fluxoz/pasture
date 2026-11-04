@@ -34,7 +34,17 @@ export async function api(path, { method = 'GET', body, headers = {}, keepalive 
   return data;
 }
 
-export const action = (op, params = {}) => api('/api/action', { method: 'POST', body: { op, ...params } });
+// Other machines are reached through this one (the hub): /m/<name>/api/..., /m/<name>/ws/term.
+let machine = null;
+export function setMachine(name) {
+  machine = name || null;
+}
+/** `path` on machine `m` (null: this one). */
+export const at = (m, path) => (m ? `/m/${encodeURIComponent(m)}${path}` : path);
+/** `path` on the machine the dashboard shows. */
+export const here = (path) => at(machine, path);
+
+export const action = (op, params = {}) => api(here('/api/action'), { method: 'POST', body: { op, ...params } });
 
 /**
  * The live event stream. Calls onState(state) with the whole dashboard state

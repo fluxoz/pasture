@@ -91,11 +91,19 @@ after every step and work through what is left.
    shell so the service keeps them.
 8. **Check.** `pasture doctor` until nothing fails; ask them to confirm the
    dashboard opens on the phone and a test notification arrives.
+9. **More machines (optional).** The phone keeps one app; one machine (the
+   hub, usually the first) reaches the others. On each other machine, steps
+   1-4 and 7, no enrolling. Then `pasture link` there prints
+   `pasture machines add <code>`: run that on the hub (ask first; the code is
+   a credential, like the enrollment link: show it to no one else, and pass it
+   between machines yourself if you run on both, or have the user paste it).
+   Details: [docs/machines.md](docs/machines.md).
 
 ## Working on this repository
 
 - `gateway/`: Python 3.11+, aiohttp. Auth (WebAuthn), sessions, providers
   (shell, tmux, herdr, alerts), the PTY bridge (POSIX PTY or Windows ConPTY),
+  links and machines (`links.py`, `machines.py`: one hub reaching the others),
   dictation (whisper-server), Web Push, the `pasture` command
   (`cli.py`, `doctor.py`, `install.py`, `tls.py`).
 - `web/`: the PWA, vanilla ES modules and one stylesheet, bundled by

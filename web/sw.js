@@ -5,7 +5,7 @@
 const VERSION = '@VERSION@';
 const CACHE = `pasture-${VERSION}`;
 const PRECACHE = @PRECACHE@;
-const NETWORK_ONLY = ['/api/', '/auth/', '/ws/', '/enroll', '/healthz'];
+const NETWORK_ONLY = ['/api/', '/auth/', '/ws/', '/m/', '/enroll', '/healthz'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(PRECACHE)));

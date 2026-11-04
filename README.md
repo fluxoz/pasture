@@ -21,6 +21,9 @@ installed on your phone's home screen.
   agent. herdr agents report on their own; any other agent (Claude Code
   hooks, scripts) with `pasture notify`. No Apple Developer account and no
   third-party notification app.
+- **All your machines**: run it on each, link them to one (`pasture link`),
+  and the phone keeps one app: a chip per machine on the dashboard, every
+  machine's alerts in one place.
 - **Yours**: it runs as your user on your machine (Linux, macOS or Windows).
   Passkey login (Face ID), one-time QR enrollment, reachable only on your
   tailnet. No accounts, no telemetry, no CDN.
@@ -80,6 +83,7 @@ tailnet, run it as root).
   sops-nix.
 - [NixOS and home-manager](docs/nixos.md): the modules, herdr, GPU dictation,
   Claude Code hooks, passkeys from your secrets manager.
+- [Several machines](docs/machines.md): one app on the phone for all of them.
 - [Troubleshooting](docs/troubleshooting.md)
 - [Security model](SECURITY.md)
 
@@ -145,6 +149,7 @@ All under `services.pasture`; only `enable`, `user` and `hostName` are required.
 | `allowedCIDRs` / `firewall.interfaces` | `[ ]` | nginx: allowed client networks; interfaces that get `listenPort`. |
 | `nonlocalBind` / `nginx.after` | `false` / `[ ]` | nginx: bind an address that appears after boot (start after `tailscaled.service`). |
 | `tls.certFile` / `tls.keyFile` / `tls.acmeHost` | `null` | nginx: your certificate. |
+| `tls.caFile` | `null` | The private CA that signed `certFile`, for `pasture link` codes ([several machines](docs/machines.md)). |
 | `secrets.sessionKeyFile` / `enrollTokenFile` / `credentialsFile` | `null` | Optional; without them the gateway keeps its own in its state dir. |
 | `enrollment.enable` | `credentialsFile == null` | With a credentials secret, turn it off to allow only those passkeys. |
 | `push.enable` / `push.subject` | `true` / `null` | Web Push; nothing is sent until a device turns it on. |
@@ -173,6 +178,8 @@ All under `services.pasture`; only `enable`, `user` and `hostName` are required.
 | `pasture hooks claude\|grok [--install]` | Agent hooks that report to pasture. |
 | `pasture notify [--kind done\|blocked\|info] [--agent A] [--project P] TEXT` | Send an alert (`--hook AGENT EVENT` reads a hook's JSON on stdin). |
 | `pasture doctor [--json]` | Check everything; print fixes. |
+| `pasture link [--name N] [--ca FILE]` / `--list` / `--revoke N` | Let a hub reach this machine ([several machines](docs/machines.md)). |
+| `pasture machines add CODE [--name N]` / `list` / `remove N` | On the hub: the machines the phone reaches through it. |
 
 `PASTURE_*` environment variables ([config.py](gateway/pasture/config.py)) set
 the rest, e.g. `PASTURE_DICTATE_SERVER` and `PASTURE_DICTATE_MODEL`.

@@ -14,6 +14,8 @@
     pasture doctor       check everything and say what to fix (--json for agents)
     pasture hooks        report Claude Code / Grok sessions to pasture
     pasture service      install pasture as a background service (or remove it)
+    pasture link         let your hub (the machine your phone uses) reach this one
+    pasture machines     on the hub: add, list or remove the machines it reaches
 
 HTTPS comes from the node's ts.net certificate (`tailscale serve`), or, after
 `pasture tls init`, from your own CA: the gateway then terminates TLS itself
@@ -47,6 +49,7 @@ TAILSCALE_PATHS = (
 
 
 def state_dir(arg: str | None) -> Path:
+    arg = arg or os.environ.get("PASTURE_STATE_DIR")
     if arg:
         return Path(arg).expanduser()
     if sys.platform == "win32":
@@ -330,6 +333,83 @@ def cmd_service(args) -> None:
         install.uninstall_service(dry_run=args.dry_run)
 
 
+def cmd_link(args) -> None:
+    import time
+
+    from . import links, tls
+
+    state = state_dir(args.state)
+    store = links.Links(state / "links.json")
+    if args.list:
+        for d in store.load():
+            print(f"{d['name']}  (since {time.strftime('%Y-%m-%d', time.localtime(d['created']))})")
+        return
+    if args.revoke:
+        print(f"Revoked {args.revoke}." if store.revoke(args.revoke) else f"No link named {args.revoke}.")
+        return
+    host = args.host or os.environ.get("PASTURE_HOST") or tailnet()["name"]
+    url = f"https://{host}" + ("" if args.https_port == 443 else f":{args.https_port}")
+    # What the hub must trust to reach us: our CA, else (a certificate of our
+    # own that no CA vouches for publicly) the certificate itself, else nothing
+    # extra (Tailscale's certificate is publicly trusted).
+    ca_file = args.ca or os.environ.get("PASTURE_LINK_CA")
+    cert_file = os.environ.get("PASTURE_CERT_FILE")
+    note = ""
+    if ca_file:
+        ca = Path(ca_file).expanduser().read_text()
+    elif tls.paths(state)["ca"].exists():
+        ca = tls.paths(state)["ca"].read_text()
+    elif cert_file and not publicly_trusted(url):
+        ca = Path(cert_file).read_text()
+        note = "\nThe hub pins this machine's certificate: after renewing it, link again (or pass --ca with the CA that signs it)."
+    else:
+        ca = None
+    code = links.encode_code(url, store.create(args.name), host.split(".")[0], ca)
+    print("On your hub (the machine your phone uses), run:\n")
+    print(f"    pasture machines add {code}\n")
+    print(f"That gives the hub your shells and agents here, like the phone has. Undo: `pasture link --revoke {args.name}`.{note}")
+
+
+def publicly_trusted(url: str) -> bool:
+    """Does our HTTPS verify without extra trust? (False if we cannot tell.)"""
+    import ssl
+    import urllib.error
+    import urllib.request
+
+    try:
+        urllib.request.urlopen(url + "/healthz", timeout=5, context=ssl.create_default_context()).close()
+        return True
+    except urllib.error.HTTPError:
+        return True  # the TLS handshake went through
+    except (urllib.error.URLError, OSError):
+        return False
+
+
+def cmd_machines(args) -> None:
+    from . import links, machines
+
+    state = state_dir(args.state)
+    registry = machines.Registry(state / "machines.json")
+    if args.action == "list":
+        entries = registry.load()
+        if not entries:
+            print("No other machines. On one, run `pasture link`, then `pasture machines add <code>` here.")
+        for e in entries:
+            print(f"{e['name']}  {e['url']}{'  (own CA)' if e.get('ca') else ''}")
+        return
+    if args.action == "remove":
+        print(f"Removed {args.target}." if registry.remove(args.target) else f"No machine named {args.target}.")
+        return
+    try:
+        data = links.decode_code(args.target)
+        name = machines.check_name(args.name or data.get("name") or "")
+        app_name = machines.probe(data["url"], data["token"], data.get("ca"))
+    except ValueError as e:
+        raise SystemExit(f"pasture: {e}")
+    registry.add(name, data["url"], data["token"], data.get("ca"))
+    print(f"Added {name} ({app_name} at {data['url']}). It shows on the phone's dashboard in a few seconds.")
+
+
 def cmd_serve(args) -> None:
     from . import tls
 
@@ -404,7 +484,7 @@ def main(argv: list[str] | None = None) -> None:
     def common(p):
         p.add_argument("--host", help="DNS name the phone uses (default: this node's MagicDNS name)")
         p.add_argument("--port", type=int, default=int(os.environ.get("PASTURE_PORT", "8795")), help="loopback port of the gateway")
-        p.add_argument("--https-port", type=int, default=443, help="tailnet HTTPS port")
+        p.add_argument("--https-port", type=int, default=int(os.environ.get("PASTURE_HTTPS_PORT", "443")), help="tailnet HTTPS port")
         p.add_argument("--state", help="state directory")
 
     serve = sub.add_parser("serve", help="run pasture (the default)")
@@ -435,6 +515,17 @@ def main(argv: list[str] | None = None) -> None:
     service.add_argument("action", choices=["install", "uninstall"])
     service.add_argument("--dry-run", action="store_true", help="print what would be written and run")
     service.add_argument("serve_args", nargs=argparse.REMAINDER, help="after --: options for `pasture serve`")
+    link = sub.add_parser("link", help="let your hub (the machine your phone uses) reach this machine")
+    common(link)
+    link.add_argument("--name", default="hub", help="what to call the hub's access here (default: hub)")
+    link.add_argument("--ca", help="the CA certificate this machine's HTTPS uses, if not `pasture tls init`'s (e.g. the NixOS nginx frontend)")
+    link.add_argument("--list", action="store_true", help="list the hubs that may reach this machine")
+    link.add_argument("--revoke", metavar="NAME", help="cut a hub off")
+    machines_cmd = sub.add_parser("machines", help="on the hub: the other machines the phone reaches through it")
+    machines_cmd.add_argument("action", choices=["add", "list", "remove"])
+    machines_cmd.add_argument("target", nargs="?", help="add: the link code from `pasture link`; remove: the machine's name")
+    machines_cmd.add_argument("--name", help="add: show it under this name (default: its host name)")
+    machines_cmd.add_argument("--state", help="state directory")
     tls_cmd = sub.add_parser("tls", help="your own CA instead of the ts.net certificate")
     tls_sub = tls_cmd.add_subparsers(dest="tls_cmd", required=True)
     init = tls_sub.add_parser("init", help="make the CA and a certificate for this node")
@@ -451,13 +542,15 @@ def main(argv: list[str] | None = None) -> None:
             except (AttributeError, ValueError):
                 pass
     argv = list(sys.argv[1:] if argv is None else argv)
-    if not argv or argv[0] not in ("serve", "enroll", "tls", "notify", "doctor", "hooks", "service", "-h", "--help", "--version"):
+    if not argv or argv[0] not in ("serve", "enroll", "tls", "notify", "doctor", "hooks", "service", "link", "machines", "-h", "--help", "--version"):
         argv.insert(0, "serve")  # `pasture` alone, or with serve's flags
     args = parser.parse_args(argv)
     if args.cmd == "tls":
         (cmd_tls_init if args.tls_cmd == "init" else cmd_tls_phone)(args)
-    elif args.cmd in ("notify", "doctor", "hooks", "service"):
-        {"notify": cmd_notify, "doctor": cmd_doctor, "hooks": cmd_hooks, "service": cmd_service}[args.cmd](args)
+    elif args.cmd == "machines" and args.action != "list" and not args.target:
+        parser.error(f"machines {args.action} needs {'a link code' if args.action == 'add' else 'a name'}")
+    elif args.cmd in ("notify", "doctor", "hooks", "service", "link", "machines"):
+        {"notify": cmd_notify, "doctor": cmd_doctor, "hooks": cmd_hooks, "service": cmd_service, "link": cmd_link, "machines": cmd_machines}[args.cmd](args)
     else:
         (cmd_enroll if args.cmd == "enroll" else cmd_serve)(args)
 

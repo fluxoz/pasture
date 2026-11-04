@@ -37,6 +37,11 @@ pasture-enroll     # QR code for the phone
 
 then do the phone steps from [Getting started, step 4](setup.md#4-start-pasture-and-enroll-your-phone).
 
+The module also gives `alice` a `pasture` command pointed at this service
+(`pasture doctor`, and `pasture link` / `pasture machines` for
+[several machines](machines.md)). With the nginx frontend and a private CA,
+set `tls.caFile` to that CA's certificate so link codes carry it.
+
 To keep the host name out of Certificate Transparency logs, use your own CA
 with the nginx frontend: [tls.md](tls.md#your-own-ca-on-nixos).
 

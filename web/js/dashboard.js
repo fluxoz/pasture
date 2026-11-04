@@ -2,7 +2,7 @@
 // Rendering is keyed, so live updates patch cards in place: no flicker, no
 // lost press state, no scroll jumps.
 
-import { api, action } from './api.js';
+import { api, action, here, setMachine } from './api.js';
 import { openSheet, closeSheet, item, items, field } from './sheet.js';
 import { $, el, glyph, G, toast, tail, ago, storage, store, vibrate } from './util.js';
 
@@ -94,8 +94,11 @@ export class Dashboard {
   constructor(root, hooks) {
     this.root = root;
     this.hooks = hooks;
-    this.config = null;
-    this.state = {};
+    this.config = null; // of the machine shown
+    this.state = {}; // of the machine shown
+    this.hubConfig = null;
+    this.hubState = {}; // this machine's, with the others under .machines
+    this.machine = storage('machine', null); // null: this machine
     this.session = storage('herdrSession', null);
     this.previews = new Map(); // key -> {sig, at, text}
     this.inflight = 0;
@@ -115,7 +118,30 @@ export class Dashboard {
   }
 
   setConfig(config) {
+    this.hubConfig = config;
     this.config = config;
+  }
+
+  // -- machines (this one is the hub for the others) ---------------------
+
+  others() {
+    return this.hubState.machines || [];
+  }
+
+  remote() {
+    return this.machine ? this.others().find((m) => m.name === this.machine) || null : null;
+  }
+
+  selectMachine(name) {
+    this.machine = name || null;
+    store('machine', this.machine);
+    this.update(this.hubState);
+    this.hooks.onMachine?.();
+  }
+
+  /** Terminals and their actions belong to the machine shown when they were opened. */
+  open(target) {
+    this.hooks.openTerm({ ...target, m: this.machine || undefined });
   }
 
   // -- state helpers ----------------------------------------------------
@@ -129,12 +155,15 @@ export class Dashboard {
     return sessions.find((s) => s.name === this.session) || sessions.find((s) => s.default) || sessions[0] || null;
   }
 
+  /** Agents waiting, on every machine (the app icon badge). */
   counts() {
     let blocked = 0;
     let done = 0;
-    for (const s of this.herdrSessions()) {
-      blocked += s.counts?.blocked || 0;
-      done += s.counts?.done || 0;
+    for (const state of [this.hubState, ...this.others().map((m) => m.state || {})]) {
+      for (const s of state.herdr?.sessions || []) {
+        blocked += s.counts?.blocked || 0;
+        done += s.counts?.done || 0;
+      }
     }
     return { blocked, done };
   }
@@ -148,25 +177,42 @@ export class Dashboard {
   // -- render -----------------------------------------------------------
 
   update(state) {
-    this.state = state;
+    this.hubState = state;
+    const others = this.others();
+    if (this.machine && !others.some((m) => m.name === this.machine)) this.machine = null; // removed meanwhile
+    const remote = this.remote();
+    this.state = remote ? remote.state || {} : state;
+    this.config = remote ? remote.config || this.hubConfig : this.hubConfig;
+    setMachine(this.machine);
+    const mk = this.machine ? `${this.machine}/` : ''; // keys stay apart across machines
     const blocks = [];
-    const herdr = state.herdr;
-    const tmux = state.tmux;
+    if (others.length) {
+      const list = [
+        { key: '.', name: null, label: this.hubConfig?.appName || 'this machine', connected: true, state },
+        ...others.map((m) => ({ key: m.name, name: m.name, label: m.name, connected: m.connected, state: m.state })),
+      ];
+      blocks.push({ key: 'machines', kind: 'machines', list });
+    }
+    if (remote && !remote.connected) {
+      blocks.push({ key: `${mk}offline`, kind: 'empty', text: `${remote.name} is not reachable right now${remote.state ? '; this is what it last reported' : ''}` });
+    }
+    const herdr = this.state.herdr;
+    const tmux = this.state.tmux;
     const sessions = this.herdrSessions();
     const current = this.currentSession();
 
-    if (herdr && sessions.length > 1) blocks.push({ key: 'sessions', kind: 'sessions', sessions, current });
+    if (herdr && sessions.length > 1) blocks.push({ key: `${mk}sessions`, kind: 'sessions', sessions, current });
     if (herdr) {
       if (!current || !current.running) {
-        blocks.push({ key: 'herdr-off', kind: 'empty', text: current ? `herdr session "${current.name}" is not running` : 'herdr is not running' });
+        blocks.push({ key: `${mk}herdr-off`, kind: 'empty', text: current ? `herdr session "${current.name}" is not running` : 'herdr is not running' });
       } else if (!current.workspaces.length) {
-        blocks.push({ key: 'herdr-none', kind: 'empty', text: 'No herdr workspaces yet. Tap + to start an agent.' });
+        blocks.push({ key: `${mk}herdr-none`, kind: 'empty', text: 'No herdr workspaces yet. Tap + to start an agent.' });
       } else {
-        for (const ws of current.workspaces) blocks.push({ key: `ws:${current.name}:${ws.id}`, kind: 'workspace', ws, session: current });
+        for (const ws of current.workspaces) blocks.push({ key: `${mk}ws:${current.name}:${ws.id}`, kind: 'workspace', ws, session: current });
       }
     }
-    if (tmux) blocks.push({ key: 'tmux', kind: 'tmux', tmux });
-    blocks.push({ key: 'quick', kind: 'quick' });
+    if (tmux) blocks.push({ key: `${mk}tmux`, kind: 'tmux', tmux });
+    if (!remote || remote.connected) blocks.push({ key: `${mk}quick`, kind: 'quick' }); // nothing to open on a machine that is away
 
     reconcile(
       this.root,
@@ -180,6 +226,8 @@ export class Dashboard {
 
   makeBlock(b) {
     switch (b.kind) {
+      case 'machines':
+        return el('div', { class: 'chips machines' });
       case 'sessions':
         return el('div', { class: 'chips' });
       case 'empty':
@@ -211,10 +259,32 @@ export class Dashboard {
 
   patchBlock(node, b) {
     if (b.kind === 'empty') setText(node, b.text);
+    else if (b.kind === 'machines') this.patchMachines(node, b);
     else if (b.kind === 'sessions') this.patchSessions(node, b);
     else if (b.kind === 'workspace') this.patchWorkspace(node, b);
     else if (b.kind === 'tmux') this.patchTmux(node, b.tmux);
     else if (b.kind === 'quick') this.patchQuick(node);
+  }
+
+  patchMachines(node, { list }) {
+    const waiting = (state) => (state?.herdr?.sessions || []).reduce((n, s) => n + (s.counts?.blocked || 0) + (s.counts?.done || 0), 0);
+    reconcile(
+      node,
+      list,
+      (m) => m.key,
+      (m) => {
+        const chip = el('button', { class: 'chip machine', type: 'button' }, glyph(G.server), el('span', { class: 'n' }));
+        chip.addEventListener('click', () => this.selectMachine(m.name));
+        return chip;
+      },
+      (chip, m) => {
+        chip.classList.toggle('on', (m.name || null) === (this.machine || null));
+        chip.classList.toggle('live', m.connected);
+        chip.title = m.connected ? m.label : `${m.label}: not reachable`;
+        const n = waiting(m.state);
+        setText(chip.querySelector('.n'), n ? `${m.label} · ${n}` : m.label);
+      },
+    );
   }
 
   patchSessions(node, { sessions, current }) {
@@ -289,17 +359,17 @@ export class Dashboard {
     setText(card.querySelector('.meta'), meta || p.id);
     card.querySelector('.unseen').hidden = p.status !== 'done';
     card._preview = {
-      key: `h:${session.name}:${p.id}`,
+      key: `${this.machine || ''}/h:${session.name}:${p.id}`,
       sig: `${p.status}:${p.state_change_seq}:${p.completion_seq}`,
       live: p.status === 'working',
-      url: `/api/preview?k=agent&s=${encodeURIComponent(session.name)}&t=${encodeURIComponent(p.id)}&n=12`,
+      url: here(`/api/preview?k=agent&s=${encodeURIComponent(session.name)}&t=${encodeURIComponent(p.id)}&n=12`),
     };
     if (!isAgent) card._preview = null;
     this.paintPreview(card);
     card._tap = () =>
       isAgent
-        ? this.hooks.openTerm({ k: 'agent', t: p.id, s: session.name, title: p.name || p.display || p.agent, pane: p.id })
-        : this.hooks.openTerm({ k: 'herdr', s: session.name, title: `herdr · ${session.name}` });
+        ? this.open({ k: 'agent', t: p.id, s: session.name, title: p.name || p.display || p.agent, pane: p.id })
+        : this.open({ k: 'herdr', s: session.name, title: `herdr · ${session.name}` });
     card._hold = () => this.paneSheet(session.name, p.id);
   }
 
@@ -325,13 +395,13 @@ export class Dashboard {
         setText(card.querySelector('.meta'), `${s.windows} window${s.windows === 1 ? '' : 's'} · ${s.cwd} · ${ago(s.activity)}`);
         card.querySelector('.unseen').hidden = !s.unseen;
         card._preview = {
-          key: `t:${s.name}`,
+          key: `${this.machine || ''}/t:${s.name}`,
           sig: String(s.activity),
           live: false,
-          url: `/api/preview?k=tmux&t=${encodeURIComponent(s.name)}&n=12`,
+          url: here(`/api/preview?k=tmux&t=${encodeURIComponent(s.name)}&n=12`),
         };
         this.paintPreview(card);
-        card._tap = () => this.hooks.openTerm({ k: 'tmux', t: s.name, title: s.name });
+        card._tap = () => this.open({ k: 'tmux', t: s.name, title: s.name });
         card._hold = () => this.tmuxSheet(s);
       },
     );
@@ -342,14 +412,14 @@ export class Dashboard {
     if (grid.childElementCount) return;
     const p = this.config?.providers || {};
     const buttons = [];
-    if (p.shell) buttons.push(this.quickButton(G.term, 'shell', () => this.hooks.openTerm({ k: 'shell', title: 'shell' })));
+    if (p.shell) buttons.push(this.quickButton(G.term, 'shell', () => this.open({ k: 'shell', title: 'shell' })));
     const def = this.state.tmux?.default;
-    if (p.tmux && def) buttons.push(this.quickButton(G.tmux, def, () => this.hooks.openTerm({ k: 'tmux', t: def, title: def })));
+    if (p.tmux && def) buttons.push(this.quickButton(G.tmux, def, () => this.open({ k: 'tmux', t: def, title: def })));
     if (p.herdr)
       buttons.push(
         this.quickButton(G.robot, 'full herdr', () => {
           const s = this.currentSession();
-          this.hooks.openTerm({ k: 'herdr', s: s?.name, title: `herdr · ${s?.name || 'default'}` });
+          this.open({ k: 'herdr', s: s?.name, title: `herdr · ${s?.name || 'default'}` });
         }),
       );
     grid.replaceChildren(...buttons);
@@ -425,8 +495,8 @@ export class Dashboard {
     body.push(
       items(
         isAgent
-          ? item({ icon: G.term, label: 'Open terminal', onSelect: () => this.hooks.openTerm({ k: 'agent', t: p.id, s: sessionName, title: p.name || p.display || p.agent, pane: p.id }) })
-          : item({ icon: G.robot, label: 'Open in full herdr', onSelect: () => this.hooks.openTerm({ k: 'herdr', s: sessionName, title: `herdr · ${sessionName}` }) }),
+          ? item({ icon: G.term, label: 'Open terminal', onSelect: () => this.open({ k: 'agent', t: p.id, s: sessionName, title: p.name || p.display || p.agent, pane: p.id }) })
+          : item({ icon: G.robot, label: 'Open in full herdr', onSelect: () => this.open({ k: 'herdr', s: sessionName, title: `herdr · ${sessionName}` }) }),
         isAgent && item({ icon: G.eye, label: 'Mark seen (focuses it in herdr)', onSelect: () => run('focus', { target: p.id }) }),
         !isAgent && item({ icon: G.eye, label: 'Focus in herdr', onSelect: () => run('focus_pane', { target: p.id }) }),
         isAgent && item({ icon: G.send, label: 'Prompt…', onSelect: () => this.promptSheet(sessionName, p) }),
@@ -436,7 +506,7 @@ export class Dashboard {
     );
     openSheet({ title: p.name || p.display || p.agent || 'shell pane', sub: [p.title, p.cwd, p.id].filter(Boolean).join(' · '), body });
     try {
-      const res = await api(`/api/preview?k=agent&s=${encodeURIComponent(sessionName)}&t=${encodeURIComponent(p.id)}&n=40`);
+      const res = await api(here(`/api/preview?k=agent&s=${encodeURIComponent(sessionName)}&t=${encodeURIComponent(p.id)}&n=40`));
       pre.textContent = tail(res.text, 40) || '(empty)';
       pre.scrollTop = pre.scrollHeight;
     } catch (e) {
@@ -476,7 +546,7 @@ export class Dashboard {
       sub: `tmux · ${s.windows} windows · ${s.cwd}`,
       body: [
         items(
-          item({ icon: G.term, label: 'Attach', onSelect: () => this.hooks.openTerm({ k: 'tmux', t: s.name, title: s.name }) }),
+          item({ icon: G.term, label: 'Attach', onSelect: () => this.open({ k: 'tmux', t: s.name, title: s.name }) }),
           item({ icon: G.pencil, label: 'Rename…', onSelect: () => this.renameSheet('Rename session', s.name, (name) => action('tmux_rename', { target: s.name, name })) }),
           item({
             icon: G.trash,
@@ -612,17 +682,17 @@ export class Dashboard {
       try {
         if (mode === 'shell') {
           closeSheet();
-          this.hooks.openTerm({ k: 'shell', title: 'shell' });
+          this.open({ k: 'shell', title: 'shell' });
         } else if (mode === 'tmux') {
           await action('tmux_new', { name: name.value.trim(), cwd: project.value });
           closeSheet();
-          this.hooks.openTerm({ k: 'tmux', t: name.value.trim(), title: name.value.trim() });
+          this.open({ k: 'tmux', t: name.value.trim(), title: name.value.trim() });
         } else {
           go.replaceChildren(glyph(G.hourglass), 'Starting…');
           const res = await action('new_agent', { session: sessionSel.value, kind: kind.value, cwd: project.value, name: name.value.trim() });
           closeSheet();
           if (res.warning) toast(res.warning);
-          this.hooks.openTerm({ k: 'agent', t: res.pane, s: sessionSel.value, title: name.value.trim(), pane: res.pane });
+          this.open({ k: 'agent', t: res.pane, s: sessionSel.value, title: name.value.trim(), pane: res.pane });
         }
       } catch (e) {
         toast(e.message, { error: true });
@@ -635,7 +705,7 @@ export class Dashboard {
     paint();
 
     try {
-      const { roots } = await api('/api/projects');
+      const { roots } = await api(here('/api/projects'));
       const home = this.config.home || '';
       const pretty = (path) => (home && path.startsWith(home) ? `~${path.slice(home.length)}` : path);
       const groups = roots.map((r) =>
@@ -657,7 +727,7 @@ export class Dashboard {
   }
 
   inboxSheet() {
-    const alerts = this.state.alerts?.items || [];
+    const alerts = this.hubState.alerts?.items || []; // every machine's (theirs are forwarded here)
     const list = alerts.length
       ? alerts.map((a) => {
           const icon = a.kind === 'blocked' ? G.bell : a.kind === 'done' ? G.check : G.bell;
@@ -665,20 +735,21 @@ export class Dashboard {
             'button',
             { class: `alert ${a.kind}`, type: 'button' },
             glyph(icon),
-            el('span', { class: 't', text: a.title || a.message }),
+            el('span', { class: 't', text: a.machine ? `${a.machine} · ${a.title || a.message}` : a.title || a.message }),
             el('span', { class: 'when', text: ago(a.time) }),
             el('span', { class: 'm', text: a.message }),
           );
           row.addEventListener('click', () => {
+            if ((a.machine || null) !== (this.machine || null)) this.selectMachine(a.machine || null);
             const match = this.matchAlert(a);
             closeSheet();
-            if (match) this.hooks.openTerm({ k: 'agent', t: match.p.id, s: match.s.name, title: match.p.name || match.p.display || match.p.agent, pane: match.p.id });
+            if (match) this.open({ k: 'agent', t: match.p.id, s: match.s.name, title: match.p.name || match.p.display || match.p.agent, pane: match.p.id });
             else toast('No matching agent pane right now');
           });
           return row;
         })
       : [el('div', { class: 'empty', text: 'No alerts in the last hour' })];
-    const al = this.state.alerts;
+    const al = this.hubState.alerts;
     openSheet({ title: 'Inbox', sub: !al?.ntfy ? 'from your agents' : al.connected ? 'from your agents and ntfy' : 'ntfy not connected', body: [el('div', { class: 'items' }, ...list)] });
   }
 

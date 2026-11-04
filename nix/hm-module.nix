@@ -80,6 +80,12 @@ in
 
   config = mkIf cfg.enable {
     home.packages = [ cfg.package ];
+    # So `pasture enroll`, `link` and `notify` in a shell find this service.
+    home.sessionVariables = {
+      PASTURE_PORT = toString cfg.port;
+      PASTURE_HTTPS_PORT = toString cfg.httpsPort;
+    }
+    // lib.optionalAttrs (cfg.host != null) { PASTURE_HOST = cfg.host; };
 
     launchd.agents.pasture = mkIf pkgs.stdenv.hostPlatform.isDarwin {
       enable = true;

@@ -1,6 +1,7 @@
 // The terminal view: xterm.js on a WebSocket to /ws/term.
 // Binary frames are terminal bytes both ways; text frames are JSON control.
 
+import { at } from './api.js';
 import { Terminal } from '/vendor/xterm.mjs';
 import { FitAddon } from '/vendor/addon-fit.mjs';
 import { WebglAddon } from '/vendor/addon-webgl.mjs';
@@ -123,7 +124,7 @@ export class TermView {
     if (this.target.t) q.set('t', this.target.t);
     if (this.target.s) q.set('s', this.target.s);
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    return `${proto}//${location.host}/ws/term?${q}`;
+    return `${proto}//${location.host}${at(this.target.m, '/ws/term')}?${q}`;
   }
 
   setStatus(status, msg) {

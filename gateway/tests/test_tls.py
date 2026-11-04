@@ -9,7 +9,7 @@ from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
-from pasture import cli, tls
+from pasture import cli, machines, tls
 
 from .helpers import TempDir
 
@@ -97,3 +97,53 @@ class TlsTest(TempDir, unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(aiohttp.ClientConnectorCertificateError) as e:
                 await s.get(f"https://127.0.0.1:{port}/", ssl=client, server_hostname="other.example.ts.net")
         self.assertIn("subtree", str(e.exception).lower())  # OpenSSL: "permitted subtree violation"
+
+    async def test_a_hub_pins_a_link_code_certificate(self):
+        p = tls.init(self.tmp, HOST)
+        _, port = await self.serve(p["cert"].read_bytes(), p["key"].read_bytes())
+        leaf = p["cert"].read_text().split("-----END CERTIFICATE-----")[0] + "-----END CERTIFICATE-----\n"
+        async with aiohttp.ClientSession() as s:
+            for pinned in (p["ca"].read_text(), leaf):  # the CA, or (no CA at hand) the certificate itself
+                async with s.get(f"https://127.0.0.1:{port}/", ssl=machines.ssl_context(pinned), server_hostname=HOST) as r:
+                    self.assertEqual(await r.text(), "ok")
+            asyncio.get_running_loop().set_exception_handler(lambda loop, ctx: None)
+            other = tls.init(self.tmp / "other", HOST)  # same name, another CA: refused
+            with self.assertRaises(aiohttp.ClientConnectorCertificateError):
+                await s.get(f"https://127.0.0.1:{port}/", ssl=machines.ssl_context(other["ca"].read_text()), server_hostname=HOST)
+
+    async def test_link_and_add_over_https(self):
+        import contextlib
+        import io
+        import os
+
+        from pasture.app import Gateway
+
+        from .helpers import make_config
+
+        # A machine with its own CA, serving pasture over HTTPS as "localhost".
+        node = make_config(self.tmp, static_dir=self.tmp, push=False)
+        p = tls.init(node.state_dir, "localhost")
+        ctx = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+        ctx.load_cert_chain(p["cert"], p["key"])
+        runner = web.AppRunner(Gateway(node).app())
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0, ssl_context=ctx)
+        await site.start()
+        self.addAsyncCleanup(runner.cleanup)
+        port = site._server.sockets[0].getsockname()[1]
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            await asyncio.to_thread(cli.main, ["link", "--host", "localhost", "--https-port", str(port), "--state", str(node.state_dir)])
+        code = next(w for w in out.getvalue().split() if w.startswith("pasture-link:"))
+        hub_state = self.tmp / "hub"
+        os.environ.pop("PASTURE_STATE_DIR", None)
+        with contextlib.redirect_stdout(io.StringIO()) as added:
+            await asyncio.to_thread(cli.main, ["machines", "add", code, "--state", str(hub_state)])
+        self.assertIn("Added localhost", added.getvalue())  # it reached the machine, trusting only its CA
+        entry = machines.Registry(hub_state / "machines.json").load()[0]
+        self.assertEqual((entry["url"], entry["ca"]), (f"https://localhost:{port}", p["ca"].read_text()))
+        with contextlib.redirect_stdout(io.StringIO()):
+            await asyncio.to_thread(cli.main, ["link", "--revoke", "hub", "--state", str(node.state_dir)])
+        with self.assertRaises(SystemExit) as e:
+            await asyncio.to_thread(cli.main, ["machines", "add", code, "--state", str(hub_state)])
+        self.assertIn("refused the link", str(e.exception))

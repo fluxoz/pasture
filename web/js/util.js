@@ -3,6 +3,7 @@
 /** Nerd Font codepoints (present in every Nerd Fonts v3 patched font). */
 export const G = {
   robot: '\u{f06a9}',
+  server: '󰒋',
   term: '',
   tmux: '',
   bell: '',

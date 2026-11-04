@@ -1,6 +1,6 @@
 // pasture: boot, views (login / dashboard / terminal), live events, menus.
 
-import { api, Events } from './api.js';
+import { api, at, Events } from './api.js';
 import { Login, Enroll, logout, webauthnSupported } from './auth.js';
 import { initViewport, onViewport } from './viewport.js';
 import { Dashboard } from './dashboard.js';
@@ -29,15 +29,15 @@ let offlineTimer = 0;
 
 function setView(view) {
   app.dataset.view = view;
-  const p = config?.providers || {};
+  const p = (dash?.config || config)?.providers || {}; // the machine the dashboard shows
   const onDash = view === 'dash';
   $('#act-herdr').hidden = !(onDash && p.herdr);
   $('#act-tmux').hidden = !(onDash && p.tmux && dash?.state.tmux?.default);
-  $('#act-inbox').hidden = !(onDash && p.alerts);
+  $('#act-inbox').hidden = !(onDash && config?.providers?.alerts); // the inbox is every machine's
   $('#act-new').hidden = !onDash;
   $('#act-menu').hidden = !(onDash || view === 'term');
   $('#term-status').hidden = view !== 'term';
-  if (view !== 'term') $('#title').textContent = config?.appName || document.title;
+  if (view !== 'term') $('#title').textContent = dash?.machine || config?.appName || document.title;
   if (onDash) dash?.pumpPreviews();
 }
 
@@ -172,6 +172,16 @@ let presenceOn = false;
 
 /** Open what a notification points at; false if it is gone. */
 function openGo(go) {
+  if (go.startsWith('m:')) {
+    // Another machine's alert: m:<machine>:agent:<session>:<pane>
+    const [, machine, ...more] = go.split(':');
+    if (!dash.others().some((m) => m.name === machine)) {
+      toast(`${machine} is no longer linked here`);
+      return false;
+    }
+    if (dash.machine !== machine) dash.selectMachine(machine);
+    go = more.join(':');
+  }
   const [kind, session, ...rest] = go.split(':');
   const pane = rest.join(':'); // pane ids contain colons
   if (kind !== 'agent' || !session || !pane) return false;
@@ -181,7 +191,7 @@ function openGo(go) {
     return false;
   }
   const p = found.p;
-  openTerm({ k: 'agent', t: p.id, s: session, title: p.name || p.display || p.agent, pane: p.id });
+  openTerm({ k: 'agent', t: p.id, s: session, title: p.name || p.display || p.agent, pane: p.id, m: dash.machine || undefined });
   return true;
 }
 
@@ -248,7 +258,7 @@ async function openTerm(t) {
   closeSheet();
   if (term) term.dispose();
   target = t;
-  $('#title').textContent = t.title || t.k;
+  $('#title').textContent = t.m ? `${t.m} · ${t.title || t.k}` : t.title || t.k;
   $('#term-overlay').hidden = true;
   setView('term');
   if (history.state?.term !== true) history.pushState({ term: true }, '');
@@ -310,7 +320,7 @@ function termMenu() {
           tile({
             icon: G.eye,
             label: 'Mark seen',
-            onSelect: () => api('/api/action', { method: 'POST', body: { op: 'focus', session: t.s, target: t.t } }).catch((e) => toast(e.message, { error: true })),
+            onSelect: () => api(at(t.m, '/api/action'), { method: 'POST', body: { op: 'focus', session: t.s, target: t.t } }).catch((e) => toast(e.message, { error: true })),
           }),
         tile({ icon: G.refresh, label: t.k === 'shell' ? 'New shell' : 'Reconnect', onSelect: () => term.reconnect() }),
       ),
@@ -549,12 +559,12 @@ const termSink = {
 
 // -- images ------------------------------------------------------------------------
 
-/** Upload images and hand their paths to `insert` (the terminal, or a prompt box). */
-async function attachImages(files, insert) {
+/** Upload images to machine `m` (where the session is) and hand their paths to `insert`. */
+async function attachImages(files, insert, m = null) {
   if (!files.length) return;
   toast(files.length > 1 ? `Uploading ${files.length} images…` : 'Uploading image…', { ms: 0 });
   try {
-    const paths = await uploadImages(files);
+    const paths = await uploadImages(files, m);
     insert(asArgs(paths));
     toast(paths.length > 1 ? `${paths.length} images added` : 'Image added');
   } catch (e) {
@@ -622,11 +632,11 @@ function wire() {
   });
   $('#act-herdr').addEventListener('click', () => {
     const s = dash.currentSession();
-    openTerm({ k: 'herdr', s: s?.name, title: `herdr · ${s?.name || 'default'}` });
+    openTerm({ k: 'herdr', s: s?.name, title: `herdr · ${s?.name || 'default'}`, m: dash.machine || undefined });
   });
   $('#act-tmux').addEventListener('click', () => {
     const name = dash.state.tmux?.default;
-    if (name) openTerm({ k: 'tmux', t: name, title: name });
+    if (name) openTerm({ k: 'tmux', t: name, title: name, m: dash.machine || undefined });
   });
   $('#act-menu').addEventListener('click', () => (app.dataset.view === 'term' ? termMenu() : dashMenu()));
   $('#term-reconnect').addEventListener('click', () => term?.reconnect());
@@ -641,9 +651,9 @@ function wire() {
     // Paste: a copied screenshot or photo goes to the agent as an image; text as text.
     paste: () =>
       readClipboard()
-        .then(({ images, text }) => (images.length ? attachImages(images, intoTerm) : text && term?.paste(text)))
+        .then(({ images, text }) => (images.length ? attachImages(images, intoTerm, target?.m) : text && term?.paste(text)))
         .catch(() => toast('Clipboard not available', { error: true })),
-    attach: () => pickImages().then((files) => attachImages(files, intoTerm)),
+    attach: () => pickImages().then((files) => attachImages(files, intoTerm, target?.m)),
     blur: () => term?.blur(),
     dictation: false,
     onMicDown: (btn) => micDown(btn, termSink),
@@ -653,7 +663,8 @@ function wire() {
   dash = new Dashboard($('#dash'), {
     openTerm,
     dictateInto: null,
-    attachInto: (insert) => pickImages().then((files) => attachImages(files, insert)),
+    attachInto: (insert) => pickImages().then((files) => attachImages(files, insert, dash.machine)),
+    onMachine: () => app.dataset.view === 'dash' && setView('dash'),
   });
   events = new Events({
     onState: (state) => {

@@ -14,6 +14,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+import aiohttp
 from aiohttp import web
 
 from . import validate
@@ -26,7 +27,9 @@ from .providers.alerts import AlertsProvider
 from .providers.herdr import HerdrProvider
 from .providers.shell import ShellProvider
 from .providers.tmux import TmuxProvider
-from .pty_bridge import MAX_PTYS_PER_SESSION, Bridge, Pty, clamp_size
+from .pty_bridge import CLOSE_EXPIRED, MAX_PTYS_PER_SESSION, Bridge, Pty, clamp_size
+from .links import Links
+from .machines import Machines
 from .push import Push, PushError
 from .uploads import MAX_BYTES as UPLOAD_MAX, Uploads
 from .sessions import Session, SessionStore
@@ -158,6 +161,10 @@ class Gateway:
         self.alerts = AlertsProvider(cfg, self.hub)  # the inbox: `pasture notify`, and ntfy if configured
         self.dictation = Dictation(cfg) if cfg.dictate else None
         self.uploads = Uploads(cfg.state_dir / "uploads", cfg.upload_days)
+        self.links = Links(cfg.state_dir / "links.json")  # hubs allowed to reach this machine
+        # Machines this one is the hub for: their state and alerts come here.
+        self.machines = Machines(cfg.state_dir / "machines.json", self.hub, self.alerts.add)
+        self.hub.register(self.machines.name, self.machines.state)
         for provider in (self.shell, self.tmux, self.herdr, self.alerts):
             if provider is not None:
                 self.hub.register(provider.name, provider.state)
@@ -186,7 +193,18 @@ class Gateway:
         }
 
     def session(self, request: web.Request, touch: bool = True) -> Session | None:
+        auth = request.headers.get("Authorization", "")
+        if auth.startswith("Bearer "):  # a hub that was given a link code (links.py)
+            link = self.links.session(auth[7:].strip())
+            if link is not None:
+                request["pasture_link"] = True
+            return link
         return self.sessions.get(request.cookies.get(self.cookie), touch=touch)
+
+    def alive(self, session) -> bool:
+        if getattr(session, "link", False):
+            return self.links.active(session.name)  # revoking a link ends its terminals too
+        return self.sessions.alive(session)
 
     def require(self, request: web.Request, touch: bool = True) -> Session:
         session = self.session(request, touch)
@@ -197,10 +215,14 @@ class Gateway:
         return session
 
     def check_origin(self, request: web.Request) -> None:
+        if request.get("pasture_link"):
+            return  # a bearer token is no ambient credential: nothing to forge across sites
         if request.headers.get("Origin") != self.cfg.origin:
             raise web.HTTPForbidden(text=json.dumps({"error": "bad origin"}), content_type="application/json")
 
     def check_csrf(self, request: web.Request) -> None:
+        if request.get("pasture_link"):
+            return  # see check_origin
         self.check_origin(request)
         if request.headers.get(CSRF_HEADER) != "1":
             raise web.HTTPForbidden(text=json.dumps({"error": "missing header"}), content_type="application/json")
@@ -254,7 +276,7 @@ class Gateway:
         if not resp.prepared:
             for k, v in SECURITY_HEADERS.items():
                 resp.headers.setdefault(k, v)
-            if request.path.startswith(("/api/", "/auth/", "/ws/", "/healthz")):
+            if request.path.startswith(("/api/", "/auth/", "/ws/", "/m/", "/healthz")):
                 resp.headers["Cache-Control"] = "no-store"
         if isinstance(resp, web.HTTPException):
             raise resp
@@ -305,7 +327,7 @@ class Gateway:
     async def logout(self, request: web.Request) -> web.Response:
         self.check_csrf(request)
         session = self.session(request, touch=False)
-        if session:
+        if session and not getattr(session, "link", False):
             self.sessions.revoke(session)
         resp = web.json_response({"ok": True})
         resp.del_cookie(self.cookie, path="/")
@@ -371,12 +393,12 @@ class Gateway:
                 try:
                     event, data = await asyncio.wait_for(queue.get(), 20.0)
                 except asyncio.TimeoutError:
-                    if not self.sessions.alive(session):
+                    if not self.alive(session):
                         await resp.write(b"event: expired\ndata: {}\n\n")
                         break
                     await resp.write(b": ping\n\n")
                     continue
-                if not self.sessions.alive(session):
+                if not self.alive(session):
                     await resp.write(b"event: expired\ndata: {}\n\n")
                     break
                 await resp.write(f"event: {event}\ndata: {data}\n\n".encode())
@@ -592,14 +614,15 @@ class Gateway:
         session = self.session(request)
         if session is None:
             return json_error(401, "login required")
-        if request.headers.get("Origin") != self.cfg.origin:
+        if request.headers.get("Origin") != self.cfg.origin and not request.get("pasture_link"):
             return json_error(403, "bad origin")
         q = request.query
         try:
             argv = self.term_argv(q.get("k"), q.get("t", ""), q.get("s"))
         except (ActionError, validate.Invalid) as e:
             return json_error(getattr(e, "status", 400), str(e))
-        if session.ptys >= MAX_PTYS_PER_SESSION:
+        cap = 4 * MAX_PTYS_PER_SESSION if getattr(session, "link", False) else MAX_PTYS_PER_SESSION  # a hub serves several phones
+        if session.ptys >= cap:
             return json_error(429, "too many open terminals")
         cols, rows = clamp_size(q.get("c"), q.get("r"))
 
@@ -610,7 +633,7 @@ class Gateway:
             self.tmux.mark_seen(q.get("t") or self.cfg.tmux_default or "")
         log.info("terminal open: %s (passkey %s…)", " ".join(argv[1:4]) or argv[0], session.cred_id[:8])
         pty = Pty(argv, self.term_env(), str(Path.home()), cols, rows)
-        bridge = Bridge(ws, pty, alive=lambda: self.sessions.alive(session), touch=lambda: self.sessions.touch(session))
+        bridge = Bridge(ws, pty, alive=lambda: self.alive(session), touch=lambda: self.sessions.touch(session))
         try:
             await bridge.run()
         except OSError as e:
@@ -627,7 +650,7 @@ class Gateway:
         session = self.session(request)
         if session is None:
             return json_error(401, "login required")
-        if request.headers.get("Origin") != self.cfg.origin:
+        if request.headers.get("Origin") != self.cfg.origin and not request.get("pasture_link"):
             return json_error(403, "bad origin")
         if self.dictation is None:
             return json_error(404, "dictation is off")
@@ -636,6 +659,98 @@ class Gateway:
         ws = web.WebSocketResponse(max_msg_size=256 * 1024, heartbeat=30.0, compress=False)
         await ws.prepare(request)
         await self.dictation.stream(ws)
+        return ws
+
+    # -- other machines (this one is their hub) -------------------------------
+
+    PROXY_API = frozenset({"action", "preview", "projects", "upload"})
+
+    async def proxy_api(self, request: web.Request) -> web.Response:
+        """/m/<name>/api/<action|preview|projects|upload>, forwarded with that machine's link token."""
+        self.require(request)
+        if request.method == "POST":
+            self.check_csrf(request)
+        remote = self.machines.get(request.match_info["name"])
+        tail = request.match_info["tail"]
+        if remote is None or tail not in self.PROXY_API:
+            return json_error(404, "no such machine")
+        url = f"{remote.entry['url']}/api/{tail}" + (f"?{request.query_string}" if request.query_string else "")
+        headers = dict(remote.headers)
+        data = None
+        if request.method == "POST":
+            data = await request.read()
+            headers["Content-Type"] = request.headers.get("Content-Type", "application/octet-stream")
+        try:
+            async with self.machines.http.request(
+                request.method, url, data=data, headers=headers, ssl=remote.ssl, timeout=aiohttp.ClientTimeout(total=60)
+            ) as r:
+                body = await r.read()
+                return web.Response(status=r.status, body=body, content_type=r.content_type or "application/json")
+        except (aiohttp.ClientError, asyncio.TimeoutError):
+            return json_error(502, f"{remote.name} is not reachable")
+
+    async def proxy_term(self, request: web.Request) -> web.StreamResponse:
+        """A terminal on another machine: this WebSocket piped to its /ws/term."""
+        session = self.session(request)
+        if session is None:
+            return json_error(401, "login required")
+        if request.headers.get("Origin") != self.cfg.origin and not request.get("pasture_link"):
+            return json_error(403, "bad origin")
+        remote = self.machines.get(request.match_info["name"])
+        if remote is None:
+            return json_error(404, "no such machine")
+        if session.ptys >= MAX_PTYS_PER_SESSION:
+            return json_error(429, "too many open terminals")
+        base = remote.entry["url"]
+        target = ("wss://" + base[8:] if base.startswith("https://") else "ws://" + base.split("://", 1)[-1]) + "/ws/term"
+        if request.query_string:
+            target += "?" + request.query_string
+        ws = web.WebSocketResponse(max_msg_size=64 * 1024, heartbeat=30.0, compress=False)
+        await ws.prepare(request)
+        session.ptys += 1
+        try:
+            async with self.machines.http.ws_connect(
+                target, headers=remote.headers, ssl=remote.ssl, heartbeat=30.0, max_msg_size=0, timeout=aiohttp.ClientWSTimeout(ws_close=5)
+            ) as up:
+
+                async def down() -> None:
+                    async for msg in up:
+                        if msg.type == aiohttp.WSMsgType.BINARY:
+                            await ws.send_bytes(msg.data)
+                        elif msg.type == aiohttp.WSMsgType.TEXT:
+                            await ws.send_str(msg.data)
+                        else:
+                            return
+
+                async def upward() -> None:
+                    async for msg in ws:
+                        self.sessions.touch(session)
+                        if msg.type == aiohttp.WSMsgType.BINARY:
+                            await up.send_bytes(msg.data)
+                        elif msg.type == aiohttp.WSMsgType.TEXT:
+                            await up.send_str(msg.data)
+                        else:
+                            return
+
+                async def watchdog() -> None:
+                    while self.alive(session):
+                        await asyncio.sleep(15)
+
+                tasks = [asyncio.create_task(t()) for t in (down, upward, watchdog)]
+                done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+                for task in pending:
+                    task.cancel()
+                if tasks[2] in done:
+                    await ws.close(code=CLOSE_EXPIRED, message=b"session expired")
+                elif tasks[0] in done and not ws.closed:
+                    await ws.close(code=up.close_code or 1000)
+        except (aiohttp.ClientError, asyncio.TimeoutError, OSError):
+            if not ws.closed:
+                await ws.close(code=1011, message=f"{remote.name} unreachable".encode())
+        finally:
+            session.ptys -= 1
+            if not ws.closed:
+                await ws.close()
         return ws
 
     # -- static and health ----------------------------------------------
@@ -674,12 +789,14 @@ class Gateway:
                 except Exception:
                     log.exception("provider %s failed to start", provider.name)
         self.uploads.start()
+        await self.machines.start()
         if self.dictation is not None:
             # Load and warm the model now, not on the first word someone says.
             self._warming = asyncio.create_task(self.dictation.warm())
 
     async def on_cleanup(self, app: web.Application) -> None:
         self.uploads.stop()
+        await self.machines.stop()
         for provider in (self.tmux, self.herdr, self.alerts):
             if provider is not None:
                 await provider.stop()
@@ -712,6 +829,9 @@ class Gateway:
         r.add_post("/api/notify", self.api_notify)
         r.add_get("/ws/term", self.ws_term)
         r.add_get("/ws/dictate", self.ws_dictate)
+        r.add_get("/m/{name}/api/{tail}", self.proxy_api)
+        r.add_post("/m/{name}/api/{tail}", self.proxy_api)
+        r.add_get("/m/{name}/ws/term", self.proxy_term)
         r.add_get("/{path:.*}", self.static_handler)
         app.on_startup.append(self.on_startup)
         app.on_cleanup.append(self.on_cleanup)

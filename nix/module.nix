@@ -59,6 +59,16 @@ let
     ${optionalString (cfg.secrets.enrollTokenFile != null) "export PASTURE_ENROLL_TOKEN_FILE=${lib.escapeShellArg cfg.secrets.enrollTokenFile}"}
     exec ${lib.getExe cli} enroll "$@"
   '';
+  # `pasture`: the command line, pointed at this service (`pasture link`,
+  # `pasture machines`, `pasture doctor`).
+  cliCommand = pkgs.writeShellScriptBin "pasture" ''
+    export PASTURE_HOST=${lib.escapeShellArg cfg.hostName}
+    export PASTURE_PORT=${toString cfg.backendPort}
+    export PASTURE_HTTPS_PORT=${toString (if nginxOn then cfg.listenPort else 443)}
+    ${optionalString (cfg.tls.certFile != null) "export PASTURE_CERT_FILE=${lib.escapeShellArg (toString cfg.tls.certFile)}"}
+    ${optionalString (cfg.tls.caFile != null) "export PASTURE_LINK_CA=${lib.escapeShellArg (toString cfg.tls.caFile)}"}
+    exec ${lib.getExe cli} "$@"
+  '';
   # `pasture-notify`: alerts from agent hooks on this machine (inbox and push).
   notifyCommand = pkgs.writeShellScriptBin "pasture-notify" ''
     export PASTURE_PORT=${toString cfg.backendPort}
@@ -249,6 +259,15 @@ in
         type = types.nullOr types.str;
         default = null;
         description = "Use the certificate of `security.acme.certs.<name>` instead of certFile/keyFile.";
+      };
+      caFile = mkOption {
+        type = types.nullOr (types.either types.path types.str);
+        default = null;
+        description = ''
+          The CA certificate that signed `certFile`, if it is a private CA. `pasture link`
+          puts it in link codes so a hub can verify this machine. Without it, a private
+          `certFile` itself is pinned (and a renewed certificate needs a new link).
+        '';
       };
     };
 
@@ -636,7 +655,11 @@ in
 
     users.users.${cfg.user} = {
       linger = mkIf cfg.linger true;
-      packages = [ notifyCommand ] ++ optional cfg.enrollment.enable enrollCommand;
+      packages = [
+        cliCommand
+        notifyCommand
+      ]
+      ++ optional cfg.enrollment.enable enrollCommand;
     };
 
     environment.etc."claude-code/managed-settings.d/50-pasture.json" = mkIf cfg.notify.claudeCode {

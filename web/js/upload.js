@@ -2,7 +2,7 @@
 // shrink it to at most 2048 px (re-encoding also drops its metadata, GPS
 // included), upload it; the server answers with the path to give the agent.
 
-import { api } from './api.js';
+import { api, at } from './api.js';
 
 const MAX_EDGE = 2048;
 
@@ -58,11 +58,11 @@ async function shrink(file) {
   return blob || file;
 }
 
-/** Shrink and upload each image; resolves to their paths on the host. */
-export async function uploadImages(files) {
+/** Shrink and upload each image to machine `m` (null: this one); resolves to their paths there. */
+export async function uploadImages(files, m = null) {
   const paths = [];
   for (const file of files) {
-    const res = await api('/api/upload', { method: 'POST', body: await shrink(file) });
+    const res = await api(at(m, '/api/upload'), { method: 'POST', body: await shrink(file) });
     paths.push(res.path);
   }
   return paths;

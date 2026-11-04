@@ -232,6 +232,11 @@ select {
 .chip.on { border-color: var(--accent); color: var(--bright); }
 .chip .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
 .chip .dot.run { background: var(--green); }
+/* Machines (this one is their hub): squarer than herdr's session chips, the icon lit when reachable. */
+.chips.machines { margin-bottom: 2px; }
+.chip.machine { border-radius: 9px; padding: 0 12px 0 9px; }
+.chip.machine .nf { font-size: 16px; color: var(--faint); }
+.chip.machine.live .nf { color: var(--green); }
 
 .section-head {
   display: flex;

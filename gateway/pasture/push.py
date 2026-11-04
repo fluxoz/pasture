@@ -218,7 +218,8 @@ class Push:
         if time.time() - (item.get("time") or time.time()) > STALE_AFTER:
             return  # a replayed backlog (ntfy sends the last hour on reconnect)
         kind = item.get("kind") or "info"
-        tag = f"{kind}:{item.get('project') or item.get('agent') or item.get('title')}"
+        where = f"{item['machine']}:" if item.get("machine") else ""  # the same project on two machines is two alerts
+        tag = f"{kind}:{where}{item.get('project') or item.get('agent') or item.get('title')}"
         now = time.monotonic()
         self.recent = {t: at for t, at in self.recent.items() if now - at < DEDUPE_FOR}
         if tag in self.recent:

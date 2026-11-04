@@ -68,6 +68,15 @@ SSH: one owner, a private network, and never the public internet.
   `<state>/uploads` with names pasture chooses (0600) and deleted after 7 days.
   The phone re-encodes them first, which strips metadata such as GPS. They are
   never served back over the web.
+- Links between machines ([docs/machines.md](docs/machines.md)): a link token
+  is a bearer credential with a session's powers on that machine (a shell),
+  but it cannot sign in, enroll or touch push. The machine keeps only its
+  SHA-256 hash and checks it in constant time; the hub keeps the token in
+  `<state>/machines.json` (0600) and sends it only to that machine's URL over
+  HTTPS, verified against Tailscale's public certificate, the machine's own CA
+  or its pinned certificate (carried in the link code). Revoking it
+  (`pasture link --revoke`) closes the hub's open terminals within seconds.
+  A hub that is compromised reaches every machine linked to it.
 - `pasture tls phone` serves only the public CA certificate, over plain HTTP,
   bound to the Tailscale IPv4 address, until you stop it.
 - Dictation audio is held in the gateway's memory for one recording and sent
