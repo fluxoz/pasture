@@ -54,6 +54,18 @@ shows inside the app instead.
 notifications are turned off in Settings. Turn Push notifications off and on
 again in the app.
 
+## Images
+
+**The agent asks for permission to read the image.** Run
+`pasture hooks claude --install` (NixOS: `services.pasture.notify.claudeCode`);
+it allows reading pasture's uploads folder. Or answer "always allow" once.
+
+**"That image is too large."** Images are shrunk on the phone first; the limit
+is 20 MB after that. Very large panoramas may still exceed it.
+
+**The image key does nothing.** The phone needs to allow the app to use
+Photos or the camera; iOS asks the first time.
+
 ## Dictation
 
 **The mic does nothing or "Microphone permission denied".** Allow the

@@ -79,7 +79,8 @@ after every step and work through what is left.
    Home Screen, open the app and tap Unlock.
 6. **Notifications.** In the installed app: ⋮ → Push notifications → Allow →
    Send a test. If they use Claude Code, offer `pasture hooks claude --install`
-   (merges two hooks into `~/.claude/settings.json`, keeps a backup); new
+   (merges two hooks into `~/.claude/settings.json`, plus a rule that lets
+   agents read the images the user sends from the phone; keeps a backup); new
    sessions then notify. Grok Build: `pasture hooks grok --install`.
 7. **Dictation (optional).** Needs whisper.cpp's `whisper-server` (macOS:
    `brew install whisper-cpp`; Windows: a whisper.cpp release; Linux: their

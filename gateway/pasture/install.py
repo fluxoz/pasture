@@ -74,8 +74,19 @@ def claude_hooks_installed(path: Path | None = None) -> bool:
     return all(_has_ours(hooks.get(event) or []) for event in ("Notification", "Stop"))
 
 
-def install_claude_hooks(path: Path | None = None, cmd: list[str] | None = None) -> bool:
-    """Merge our hooks into Claude Code's settings. Returns False if they were there."""
+def uploads_rule(uploads: Path) -> str | None:
+    """A Claude Code permission rule that lets agents read images from the phone."""
+    if sys.platform == "win32":
+        return None
+    try:
+        return f"Read(~/{uploads.relative_to(Path.home()).as_posix()}/**)"
+    except ValueError:
+        return f"Read(/{uploads.as_posix()}/**)"  # "//" = an absolute path in Claude Code rules
+
+
+def install_claude_hooks(path: Path | None = None, cmd: list[str] | None = None, uploads: Path | None = None) -> bool:
+    """Merge our hooks (and the read permission for uploads) into Claude Code's
+    settings. Returns False if everything was there."""
     path = path or claude_settings()
     text = path.read_text() if path.exists() else ""
     data = json.loads(text) if text.strip() else {}
@@ -85,6 +96,12 @@ def install_claude_hooks(path: Path | None = None, cmd: list[str] | None = None)
         existing = hooks.setdefault(event, [])
         if not _has_ours(existing):
             existing.extend(entries)
+            changed = True
+    rule = uploads_rule(uploads) if uploads else None
+    if rule:
+        allow = data.setdefault("permissions", {}).setdefault("allow", [])
+        if rule not in allow:
+            allow.append(rule)
             changed = True
     if changed:
         path.parent.mkdir(parents=True, exist_ok=True)

@@ -67,7 +67,8 @@ services.pasture = {
 
 - herdr agents raise "needs you" and "finished" alerts on their own.
 - `notify.claudeCode` adds Claude Code hooks for every session on the machine
-  (in herdr or not). For other agents, call
+  (in herdr or not), and lets agents read the images sent from the phone
+  (`~/.local/state/pasture/uploads`) without asking. For other agents, call
   `${config.services.pasture.notify.package}/bin/pasture-notify --hook <agent> stop`
   from their hooks.
 - Dictation keeps the model loaded on the GPU from boot

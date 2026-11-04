@@ -540,6 +540,10 @@ export class Dashboard {
       mic.addEventListener('click', () => this.hooks.dictateInto(mic, sink));
       row.append(mic);
     }
+    if (this.hooks.attachInto) {
+      const add = (args) => (text.value = text.value.trim() ? `${text.value.trim()} ${args}` : args);
+      row.append(el('button', { class: 'btn', type: 'button', 'aria-label': 'attach an image', onclick: () => this.hooks.attachInto(add) }, glyph(G.image)));
+    }
     row.append(el('button', { class: 'btn primary', type: 'button', onclick: send }, glyph(G.send), 'Send'));
     openSheet({ title: `Prompt ${p.name || p.display || p.agent}`, sub: p.title || p.cwd || '', body: [text, row] });
     setTimeout(() => text.focus(), 60);

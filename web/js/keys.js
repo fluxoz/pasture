@@ -154,7 +154,9 @@ export class KeyBar {
     );
     // Enter stays in reach next to the mic, whatever the keys are scrolled to.
     const enter = k(glyph(G.enter), '\r', { cls: 'key enter', aria: 'enter' });
-    this.end?.replaceChildren(group(enter), ...[this.micBtn].filter(Boolean));
+    // An image for the agent: the picker needs the tap itself, so this is a click.
+    const image = this.button(glyph(G.image), { cls: 'key image', aria: 'attach an image', click: () => this.hooks.attach() });
+    this.end?.replaceChildren(group(image, enter), ...[this.micBtn].filter(Boolean));
     this.paintMods();
     // Fade whichever edge has more keys behind it.
     const fade = () => {

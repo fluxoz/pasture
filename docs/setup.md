@@ -125,7 +125,24 @@ Where alerts come from:
 
 While the app is open in front, alerts show inside it instead of as a push.
 
-## 7. Dictation
+## 7. Images
+
+Show an agent a screenshot, a whiteboard or an error on another screen:
+
+- In a terminal, tap the **image** key at the right of the key bar (next to
+  Enter) and take a photo or pick from your library; several at once work.
+- Or copy a screenshot and tap the **paste** key: an image on the clipboard is
+  sent as an image.
+- In an agent's Prompt sheet, the image button adds them to the prompt.
+
+pasture shrinks each image to at most 2048 px on the phone (which also drops
+its metadata, GPS included), stores it in pasture's `uploads` folder on the
+machine, and types its path into the session. Claude Code takes an image path
+in a prompt as the image. `pasture hooks claude --install` also lets agents
+read that folder without asking. Uploads are deleted after 7 days
+(`PASTURE_UPLOAD_DAYS`).
+
+## 8. Dictation
 
 pasture runs whisper.cpp's `whisper-server` on your machine. Point it at the
 server and a model, then restart pasture (or re-run `pasture service install`
@@ -150,7 +167,7 @@ The pause length and the Enter are per-device settings in the terminal's ⋮
 menu. With a GPU the text lands about 50 ms after you stop; on a fast CPU,
 about half a second.
 
-## 8. Check it
+## 9. Check it
 
 ```sh
 pasture doctor
@@ -184,7 +201,7 @@ profile ([how](tls.md#removing-the-ca-from-the-phone)).
 
 | | Linux, macOS | Windows |
 |---|---|---|
-| State: passkeys, keys, push subscriptions, your CA | `~/.local/state/pasture` | `%LOCALAPPDATA%\pasture` |
+| State: passkeys, keys, push subscriptions, your CA, images from the phone (`uploads/`) | `~/.local/state/pasture` | `%LOCALAPPDATA%\pasture` |
 | Service | `~/.config/systemd/user/pasture.service`, `~/Library/LaunchAgents/dev.pasture.plist` | Startup folder: `pasture.cmd` |
 | Logs | `journalctl --user -u pasture`, `~/Library/Logs/pasture.log` | the window it runs in |
 

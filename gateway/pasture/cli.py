@@ -310,7 +310,7 @@ def cmd_hooks(args) -> None:
             print(f"(add to {install.claude_settings()}, or run `pasture hooks claude --install`)", file=sys.stderr)
             return
         path = Path(args.settings).expanduser() if args.settings else None
-        changed = install.install_claude_hooks(path)
+        changed = install.install_claude_hooks(path, uploads=state_dir(None) / "uploads")
         where = path or install.claude_settings()
         print(f"Claude Code hooks {'added to' if changed else 'already in'} {where}. New Claude sessions report to pasture.")
     else:

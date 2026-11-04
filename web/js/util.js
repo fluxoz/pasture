@@ -37,7 +37,7 @@ export const G = {
   minus: '󰍴',
   plusBox: '󰐕',
   micLine: '󰍬',
-  monitor: '󰍹',
+  monitor: '󰍹',  image: '󰋩',
 };
 
 export const $ = (sel, root = document) => root.querySelector(sel);

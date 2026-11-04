@@ -55,6 +55,8 @@
             (pkgs.python3.withPackages (ps: [
               ps.aiohttp
               ps.webauthn
+              ps.cryptography
+              ps.segno
             ]))
             pkgs.woff2
           ];

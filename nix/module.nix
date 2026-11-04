@@ -413,8 +413,9 @@ in
       default = false;
       description = ''
         Claude Code hooks (a system managed-settings drop-in) that send "needs
-        you" and "finished" to pasture: the inbox and push notifications, for
-        sessions outside herdr too. `pasture-notify` is installed either way.
+        you" and "finished" to pasture (the inbox and push notifications, for
+        sessions outside herdr too), and a rule that lets agents read the images
+        sent from the phone. `pasture-notify` is installed either way.
       '';
     };
 
@@ -576,7 +577,7 @@ in
         extraConfig = ''
           ${concatMapStrings (cidr: "allow ${cidr};\n") cfg.allowedCIDRs}${optionalString (cfg.allowedCIDRs != [ ]) "deny all;\n"}
           add_header Strict-Transport-Security "max-age=31536000" always;
-          client_max_body_size 3m;
+          client_max_body_size 21m; # images from the phone
         '';
         locations."/" = {
           proxyPass = "http://127.0.0.1:${toString cfg.backendPort}";
@@ -644,6 +645,8 @@ in
           Notification = [ { hooks = [ (claudeHook "notification") ]; } ];
           Stop = [ { hooks = [ (claudeHook "stop") ]; } ];
         };
+        # Images from the phone land here; agents read them without asking.
+        permissions.allow = [ "Read(~/.local/state/pasture/uploads/**)" ];
       };
     };
 

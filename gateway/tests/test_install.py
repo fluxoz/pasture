@@ -29,6 +29,17 @@ class HooksTest(TempDir, unittest.TestCase):
         self.assertFalse(install.install_claude_hooks(path, CMD))  # already there
         self.assertTrue(install.claude_hooks_installed(path))
 
+    def test_uploads_permission(self):
+        path = self.tmp / "settings.json"
+        uploads = Path.home() / ".local" / "state" / "pasture" / "uploads"
+        install.install_claude_hooks(path, CMD, uploads=uploads)
+        allow = json.loads(path.read_text())["permissions"]["allow"]
+        if os.name == "posix":
+            self.assertEqual(allow, ["Read(~/.local/state/pasture/uploads/**)"])
+        self.assertFalse(install.install_claude_hooks(path, CMD, uploads=uploads))
+        self.assertEqual(install.uploads_rule(Path("/srv/pasture/uploads")) if os.name == "posix" else None,
+                         "Read(//srv/pasture/uploads/**)" if os.name == "posix" else None)
+
     def test_fresh_settings_and_grok(self):
         path = self.tmp / "new" / "settings.json"
         self.assertTrue(install.install_claude_hooks(path, CMD))

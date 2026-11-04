@@ -105,6 +105,7 @@ class Config:
     dictate_idle_minutes: float = 0.0  # stop the model after this long unused; 0 = keep it loaded
     dictate_prompt: str = ""
     dictate_args: list[str] = field(default_factory=list)
+    upload_days: float = 7.0  # images from the phone are deleted after this long (0 = keep)
     push: bool = True  # Web Push to devices that turn it on
     tls_cert: Path | None = None  # serve HTTPS ourselves (own CA; tailscale serve forwards TCP)
     tls_key: Path | None = None
@@ -203,6 +204,7 @@ def load() -> Config:
         dictate_idle_minutes=_float("PASTURE_DICTATE_IDLE_MINUTES", 0.0),
         dictate_prompt=_env("PASTURE_DICTATE_PROMPT", "") or "",
         dictate_args=dictate_args,
+        upload_days=_float("PASTURE_UPLOAD_DAYS", 7.0),
         push=_bool("PASTURE_PUSH", True),
         tls_cert=_path("PASTURE_TLS_CERT"),
         tls_key=_path("PASTURE_TLS_KEY"),

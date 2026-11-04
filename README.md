@@ -14,6 +14,8 @@ installed on your phone's home screen.
   Enter, paste).
 - **Just say it**: tap the mic and talk. whisper.cpp transcribes on your own
   machine while you speak; pause, and it types the text and presses Enter.
+- **Show it**: send a photo or screenshot from the phone into a session (the
+  image key in the key bar, or paste); the agent gets the image.
 - **Know when they finish**: push notifications to your lock screen when an
   agent needs you or is done, even with the app closed; tap one to open that
   agent. herdr agents report on their own; any other agent (Claude Code

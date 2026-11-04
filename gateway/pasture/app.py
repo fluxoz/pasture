@@ -28,6 +28,7 @@ from .providers.shell import ShellProvider
 from .providers.tmux import TmuxProvider
 from .pty_bridge import MAX_PTYS_PER_SESSION, Bridge, Pty, clamp_size
 from .push import Push, PushError
+from .uploads import MAX_BYTES as UPLOAD_MAX, Uploads
 from .sessions import Session, SessionStore
 
 log = logging.getLogger("pasture")
@@ -156,6 +157,7 @@ class Gateway:
         self.herdr = HerdrProvider(cfg, self.hub) if cfg.herdr else None
         self.alerts = AlertsProvider(cfg, self.hub)  # the inbox: `pasture notify`, and ntfy if configured
         self.dictation = Dictation(cfg) if cfg.dictate else None
+        self.uploads = Uploads(cfg.state_dir / "uploads", cfg.upload_days)
         for provider in (self.shell, self.tmux, self.herdr, self.alerts):
             if provider is not None:
                 self.hub.register(provider.name, provider.state)
@@ -531,6 +533,22 @@ class Gateway:
             self.push.seen(device, bool(body.get("visible")))
         return web.json_response({"ok": True})
 
+    async def api_upload(self, request: web.Request) -> web.Response:
+        """An image from the phone; answers with the path to give the agent."""
+        self.require(request)
+        self.check_csrf(request)
+        if request.content_length is not None and request.content_length > UPLOAD_MAX:
+            return json_error(413, "image too large")
+        data = await request.content.read(UPLOAD_MAX + 1)
+        if len(data) > UPLOAD_MAX:
+            return json_error(413, "image too large")
+        try:
+            path = self.uploads.save(data)
+        except ValueError:
+            return json_error(415, "not an image")
+        log.info("upload: %s (%d KB)", path.name, len(data) // 1024)
+        return web.json_response({"path": str(path)})
+
     async def api_dictate(self, request: web.Request) -> web.Response:
         self.require(request)
         self.check_csrf(request)
@@ -655,11 +673,13 @@ class Gateway:
                     await provider.start()
                 except Exception:
                     log.exception("provider %s failed to start", provider.name)
+        self.uploads.start()
         if self.dictation is not None:
             # Load and warm the model now, not on the first word someone says.
             self._warming = asyncio.create_task(self.dictation.warm())
 
     async def on_cleanup(self, app: web.Application) -> None:
+        self.uploads.stop()
         for provider in (self.tmux, self.herdr, self.alerts):
             if provider is not None:
                 await provider.stop()
@@ -669,7 +689,7 @@ class Gateway:
             await self.push.close()
 
     def app(self) -> web.Application:
-        app = web.Application(middlewares=[self.headers_mw], client_max_size=2 * 1024 * 1024 + 1024)
+        app = web.Application(middlewares=[self.headers_mw], client_max_size=UPLOAD_MAX + 1024)
         r = app.router
         r.add_get("/healthz", self.healthz)
         r.add_get("/auth/info", self.auth_info)
@@ -684,6 +704,7 @@ class Gateway:
         r.add_get("/api/preview", self.api_preview)
         r.add_post("/api/action", self.api_action)
         r.add_post("/api/dictate", self.api_dictate)
+        r.add_post("/api/upload", self.api_upload)
         r.add_post("/api/push/subscribe", self.api_push_subscribe)
         r.add_post("/api/push/unsubscribe", self.api_push_unsubscribe)
         r.add_post("/api/push/test", self.api_push_test)

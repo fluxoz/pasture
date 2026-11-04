@@ -7,6 +7,7 @@ import { Dashboard } from './dashboard.js';
 import { TermView } from './term.js';
 import { KeyBar } from './keys.js';
 import { Recorder, primeAudio } from './dictate.js';
+import { pickImages, readClipboard, uploadImages, asArgs } from './upload.js';
 import { pushSupport, currentSubscription, enablePush, disablePush, testPush, pushKinds, updatePushKinds, trackPresence } from './push.js';
 import { openSheet, closeSheet, item, items, tiles, tile, section, toggle, choice, stepper, note } from './sheet.js';
 import { $, el, G, toast, storage, store, vibrate } from './util.js';
@@ -546,6 +547,24 @@ const termSink = {
   end: () => ($('#dictation').hidden = true),
 };
 
+// -- images ------------------------------------------------------------------------
+
+/** Upload images and hand their paths to `insert` (the terminal, or a prompt box). */
+async function attachImages(files, insert) {
+  if (!files.length) return;
+  toast(files.length > 1 ? `Uploading ${files.length} images…` : 'Uploading image…', { ms: 0 });
+  try {
+    const paths = await uploadImages(files);
+    insert(asArgs(paths));
+    toast(paths.length > 1 ? `${paths.length} images added` : 'Image added');
+  } catch (e) {
+    toast(e?.status === 413 ? 'That image is too large' : explain(e), { error: true });
+  }
+}
+
+/** Typed into the session like a pasted path: Claude Code takes an image path as the image. */
+const intoTerm = (args) => term?.paste(`${args} `);
+
 // -- service worker --------------------------------------------------------------
 
 function registerServiceWorker() {
@@ -619,11 +638,12 @@ function wire() {
   keybar = new KeyBar($('#keys'), {
     send: (s) => term?.sendText(s),
     appCursor: () => term?.appCursor() ?? false,
+    // Paste: a copied screenshot or photo goes to the agent as an image; text as text.
     paste: () =>
-      navigator.clipboard
-        .readText()
-        .then((text) => text && term?.paste(text))
+      readClipboard()
+        .then(({ images, text }) => (images.length ? attachImages(images, intoTerm) : text && term?.paste(text)))
         .catch(() => toast('Clipboard not available', { error: true })),
+    attach: () => pickImages().then((files) => attachImages(files, intoTerm)),
     blur: () => term?.blur(),
     dictation: false,
     onMicDown: (btn) => micDown(btn, termSink),
@@ -633,6 +653,7 @@ function wire() {
   dash = new Dashboard($('#dash'), {
     openTerm,
     dictateInto: null,
+    attachInto: (insert) => pickImages().then((files) => attachImages(files, insert)),
   });
   events = new Events({
     onState: (state) => {

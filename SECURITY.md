@@ -63,6 +63,11 @@ SSH: one owner, a private network, and never the public internet.
   name-constrained to one host name (critical X.509 NameConstraints), so a
   phone that trusts it trusts nothing else; still, delete or move the CA key
   if you will not renew certificates on this machine.
+- Images from the phone: only an authenticated session can upload; only image
+  files are accepted (checked by content), at most 20 MB, saved under
+  `<state>/uploads` with names pasture chooses (0600) and deleted after 7 days.
+  The phone re-encodes them first, which strips metadata such as GPS. They are
+  never served back over the web.
 - `pasture tls phone` serves only the public CA certificate, over plain HTTP,
   bound to the Tailscale IPv4 address, until you stop it.
 - Dictation audio is held in the gateway's memory for one recording and sent

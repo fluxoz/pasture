@@ -439,6 +439,7 @@ select {
 /* The mic: the bar's one primary action, pinned right while the keys scroll. */
 .keys-end { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; padding: 0 10px 0 2px; }
 .key.enter { min-width: 52px; color: var(--accent); }
+.key.image { min-width: 48px; }
 .key.enter .nf { font-size: 24px; }
 .mic {
   height: calc(var(--key-h) - 12px);
