@@ -57,7 +57,9 @@ class ServiceTest(TempDir, unittest.TestCase):
         with mock.patch.dict(os.environ, env), contextlib.redirect_stdout(out):
             install.install_service(["--name", "box"], dry_run=True)
             self.assertFalse(install.service_installed())
-        self.assertIn("serve --name box", out.getvalue())
+        text = out.getvalue()
+        for word in ("serve", "--name", "box"):  # one command line (systemd, Windows) or plist <string>s (macOS)
+            self.assertIn(word, text)
 
 
 class DoctorTest(TempDir, unittest.TestCase):
