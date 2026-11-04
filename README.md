@@ -34,8 +34,8 @@ phone, enrolling, notifications, dictation, and running it as a service.
 1. Install [Tailscale](https://tailscale.com/download) on the machine and the
    phone; turn on **MagicDNS** in the admin console.
 2. Download `pasture` for your platform from
-   [Releases](https://github.com/fluxoz/pasture/releases) (or, with Nix,
-   `nix run github:fluxoz/pasture`).
+   [Releases](https://github.com/fluxoz/pasture/releases) (or, with Nix on Linux
+   or macOS, `nix run github:fluxoz/pasture`).
 3. Pick HTTPS: turn on **HTTPS certificates** in the Tailscale admin console,
    or keep your machine's name private with your own CA:
    `pasture tls init`, then `pasture tls phone` and scan the QR code to trust
@@ -49,7 +49,7 @@ On Linux, `tailscale serve` needs permission once:
 `sudo tailscale set --operator=$USER`. `pasture enroll` prints a new one-time
 QR code for another device.
 
-### home-manager (Linux)
+### home-manager (Linux, macOS)
 
 ```nix
 # flake inputs
@@ -66,9 +66,9 @@ inputs.pasture.url = "github:fluxoz/pasture";
 }
 ```
 
-It runs `pasture serve` as a systemd user service. Run
-`loginctl enable-linger $USER` so it keeps running while you are logged out,
-and `pasture enroll` for the QR code.
+It runs `pasture serve` as a systemd user service on Linux (run
+`loginctl enable-linger $USER` so it keeps running while you are logged out)
+or a launchd agent on macOS. `pasture enroll` prints the QR code.
 
 ### NixOS
 

@@ -1,12 +1,10 @@
 # `pasture`: the command for running pasture without the NixOS module
-# (`nix run`, home-manager, any Linux machine with Nix on a tailnet). It wraps
-# the gateway with the web bundle and qrencode; give it whisper-cpp and a model
-# for dictation.
+# (`nix run`, home-manager; Linux or macOS with Nix, on a tailnet). It wraps the
+# gateway with the web bundle; give it whisper-cpp and a model for dictation.
 {
   lib,
   runCommand,
   makeWrapper,
-  qrencode,
   gateway,
   web,
   dictationServer ? null, # a whisper-cpp package (provides whisper-server)
@@ -27,7 +25,6 @@ runCommand "pasture"
   ''
     makeWrapper ${lib.getExe' gateway "pasture"} $out/bin/pasture \
       --set-default PASTURE_STATIC ${web} \
-      --prefix PATH : ${lib.makeBinPath [ qrencode ]} \
       ${lib.optionalString dictation ''
         --set-default PASTURE_DICTATE_SERVER ${lib.getExe' dictationServer "whisper-server"} \
         --set-default PASTURE_DICTATE_MODEL ${dictationModel}

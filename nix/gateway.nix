@@ -38,6 +38,6 @@ python3Packages.buildPythonApplication {
     description = "Gateway for pasture, a passkey-gated PWA terminal and session dashboard";
     license = lib.licenses.mit;
     mainProgram = "pasture-gateway";
-    platforms = lib.platforms.linux;
+    platforms = lib.platforms.unix;
   };
 }

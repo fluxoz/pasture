@@ -1,16 +1,23 @@
-# Every push: the Nix packages (the gateway's tests run in its build), and the
-# test suite on Linux, macOS and Windows with plain Python.
+# Every push: the Nix packages on Linux (x86_64, arm64) and macOS, via Determinate
+# Nix (the gateway's tests run in its build), and the test suite on Linux, macOS
+# and Windows with plain Python.
 name: ci
 on:
   push:
   pull_request:
 jobs:
   nix:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - uses: cachix/install-nix-action@v31
+      - uses: DeterminateSystems/determinate-nix-action@v3
+      - uses: DeterminateSystems/magic-nix-cache-action@v15
       - run: nix build -L .#gateway .#web .#pasture
+      - run: nix run .#pasture -- --help
   tests:
     strategy:
       fail-fast: false

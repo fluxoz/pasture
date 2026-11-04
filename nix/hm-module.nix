@@ -1,5 +1,5 @@
-# services.pasture for home-manager (Linux): run `pasture serve` as a systemd
-# user service on a machine that is on a tailnet, NixOS or not. It finds the
+# services.pasture for home-manager: run `pasture serve` as a systemd user
+# service (Linux) or a launchd agent (macOS) on a machine that is on a tailnet. It finds the
 # node's MagicDNS name and sets up `tailscale serve` itself; `pasture enroll`
 # shows the QR code for a phone.
 self:
@@ -13,7 +13,7 @@ let
   inherit (lib) mkOption mkEnableOption types mkIf;
   cfg = config.services.pasture;
   packages = self.packages.${pkgs.stdenv.hostPlatform.system};
-  args = lib.escapeShellArgs (
+  argList = (
     [
       "--port"
       (toString cfg.port)
@@ -28,6 +28,7 @@ let
     ]
     ++ lib.optional (!cfg.tailscaleServe) "--no-tailscale-serve"
   );
+  args = lib.escapeShellArgs argList;
 in
 {
   options.services.pasture = {
@@ -78,14 +79,27 @@ in
   };
 
   config = mkIf cfg.enable {
-    assertions = [
-      {
-        assertion = pkgs.stdenv.hostPlatform.isLinux;
-        message = "services.pasture (home-manager) supports Linux only for now.";
-      }
-    ];
     home.packages = [ cfg.package ];
-    systemd.user.services.pasture = {
+
+    launchd.agents.pasture = mkIf pkgs.stdenv.hostPlatform.isDarwin {
+      enable = true;
+      config = {
+        ProgramArguments = [
+          (lib.getExe cfg.package)
+          "serve"
+        ] ++ argList;
+        EnvironmentVariables = {
+          # The Tailscale app's CLI is found by pasture itself; this is for the shells.
+          PATH = "${config.home.profileDirectory}/bin:/run/current-system/sw/bin:/nix/var/nix/profiles/default/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin";
+        } // cfg.environment;
+        RunAtLoad = true;
+        KeepAlive = true;
+        StandardOutPath = "${config.home.homeDirectory}/Library/Logs/pasture.log";
+        StandardErrorPath = "${config.home.homeDirectory}/Library/Logs/pasture.log";
+      };
+    };
+
+    systemd.user.services.pasture = mkIf pkgs.stdenv.hostPlatform.isLinux {
       Unit = {
         Description = "pasture: passkey PWA terminal on the tailnet";
         After = [ "network-online.target" ];
