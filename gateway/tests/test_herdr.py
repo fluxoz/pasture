@@ -1,5 +1,6 @@
 import asyncio
 import json
+import sys
 import unittest
 
 from pasture.hub import Hub
@@ -99,6 +100,7 @@ class FakeHerdr:
         writer.close()
 
 
+@unittest.skipIf(sys.platform == "win32", "uses unix sockets")
 class ProviderTest(TempDir, unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         (self.tmp / "dev" / "proj").mkdir(parents=True)

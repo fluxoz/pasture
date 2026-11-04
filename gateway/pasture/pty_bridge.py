@@ -7,22 +7,30 @@ control messages ({"t":"resize","cols","rows"}, {"t":"ping"}).
 
 Closing the socket hangs up only the client process (herdr attach, tmux
 attach, or a plain shell); herdr panes and tmux sessions live on.
+
+A PTY is a POSIX pseudo-terminal (fd I/O on the event loop) or, on Windows, a
+ConPTY through pywinpty (a reader thread). Both offer start/pause/resume/
+write/resize/poll/terminate; the bridge does not care which it has.
 """
 
 from __future__ import annotations
 
 import asyncio
 import errno
-import fcntl
 import json
 import logging
 import os
 import shutil
 import signal
 import struct
-import termios
+import sys
+import threading
 
 from aiohttp import WSMsgType, web
+
+if sys.platform != "win32":
+    import fcntl
+    import termios
 
 log = logging.getLogger("pasture.pty")
 
@@ -48,7 +56,7 @@ def clamp_size(cols, rows) -> tuple[int, int]:
     return max(10, min(cols, 500)), max(4, min(rows, 300))
 
 
-class Pty:
+class PosixPty:
     def __init__(self, argv: list[str], env: dict[str, str], cwd: str, cols: int, rows: int):
         self.argv = argv
         self.env = env
@@ -57,6 +65,10 @@ class Pty:
         self.pid = -1
         self.fd = -1
         self.status: int | None = None
+        self.loop: asyncio.AbstractEventLoop | None = None
+        self.reading = False
+        self.writing = False
+        self.pending_in = bytearray()
 
     def spawn(self) -> None:
         # Prepare everything before fork so the child does as little as
@@ -116,6 +128,7 @@ class Pty:
         self.close_fd()
 
     def close_fd(self) -> None:
+        self.stop()
         if self.fd >= 0:
             try:
                 os.close(self.fd)
@@ -123,38 +136,31 @@ class Pty:
                 pass
             self.fd = -1
 
+    # -- I/O on the event loop ---------------------------------------------
 
-class Bridge:
-    """Runs one terminal session over an already-prepared WebSocket."""
+    def start(self, loop: asyncio.AbstractEventLoop, on_data, on_eof) -> None:
+        self.loop, self.on_data, self.on_eof = loop, on_data, on_eof
+        self.resume()
 
-    def __init__(self, ws: web.WebSocketResponse, pty: Pty, alive, touch):
-        self.ws = ws
-        self.pty = pty
-        self.alive = alive  # () -> bool: is the login session still valid?
-        self.touch = touch  # () -> None: record activity
-        self.loop = asyncio.get_running_loop()
-        self.out: asyncio.Queue[bytes | None] = asyncio.Queue()
-        self.queued = 0
-        self.reading = False
-        self.pending_in = bytearray()
-        self.writing = False
-        self.last_frame = self.loop.time()
+    def pause(self) -> None:
+        if self.reading:
+            self.loop.remove_reader(self.fd)
+            self.reading = False
 
-    # -- PTY -> WS -------------------------------------------------------
-
-    def _start_reading(self) -> None:
-        if not self.reading and self.pty.fd >= 0:
-            self.loop.add_reader(self.pty.fd, self._on_readable)
+    def resume(self) -> None:
+        if not self.reading and self.fd >= 0 and self.status is None:
+            self.loop.add_reader(self.fd, self._on_readable)
             self.reading = True
 
-    def _stop_reading(self) -> None:
-        if self.reading:
-            self.loop.remove_reader(self.pty.fd)
-            self.reading = False
+    def stop(self) -> None:
+        self.pause()
+        if self.writing and self.fd >= 0:
+            self.loop.remove_writer(self.fd)
+            self.writing = False
 
     def _on_readable(self) -> None:
         try:
-            data = os.read(self.pty.fd, READ_CHUNK)
+            data = os.read(self.fd, READ_CHUNK)
         except BlockingIOError:
             return
         except OSError as e:  # EIO: the child side closed
@@ -162,13 +168,137 @@ class Bridge:
                 log.warning("pty read: %s", e)
             data = b""
         if not data:
-            self._stop_reading()
-            self.out.put_nowait(None)
+            self.pause()
+            self.on_eof()
             return
+        self.on_data(data)
+
+    def write(self, data: bytes) -> None:
+        self.pending_in += data
+        if len(self.pending_in) > HIGH_WATER:
+            del self.pending_in[: len(self.pending_in) - HIGH_WATER]
+        self._flush_in()
+
+    def _flush_in(self) -> None:
+        while self.pending_in and self.fd >= 0:
+            try:
+                n = os.write(self.fd, self.pending_in)
+            except BlockingIOError:
+                break
+            except OSError:
+                self.pending_in.clear()
+                break
+            del self.pending_in[:n]
+        if self.pending_in and not self.writing and self.fd >= 0:
+            self.loop.add_writer(self.fd, self._flush_in)
+            self.writing = True
+        elif not self.pending_in and self.writing:
+            self.loop.remove_writer(self.fd)
+            self.writing = False
+
+
+class WinPty:
+    """ConPTY via pywinpty. Reads block, so a thread feeds the event loop."""
+
+    def __init__(self, argv: list[str], env: dict[str, str], cwd: str, cols: int, rows: int):
+        self.argv = argv
+        self.env = env
+        self.cwd = cwd
+        self.cols, self.rows = cols, rows
+        self.pid = -1
+        self.proc = None
+        self.status: int | None = None
+        self.go = threading.Event()
+        self.go.set()
+
+    def spawn(self) -> None:
+        from winpty import PtyProcess  # Windows only
+
+        program = shutil.which(self.argv[0], path=self.env.get("PATH")) or self.argv[0]
+        cwd = self.cwd if os.path.isdir(self.cwd) else None
+        self.proc = PtyProcess.spawn([program, *self.argv[1:]], cwd=cwd, env=self.env, dimensions=(self.rows, self.cols))
+        self.pid = self.proc.pid
+
+    def start(self, loop: asyncio.AbstractEventLoop, on_data, on_eof) -> None:
+        def reader() -> None:
+            while True:
+                self.go.wait()
+                try:
+                    text = self.proc.read(READ_CHUNK)
+                except EOFError:
+                    break
+                except OSError:
+                    break
+                if text:
+                    loop.call_soon_threadsafe(on_data, text.encode("utf-8", "replace"))
+                elif not self.proc.isalive():
+                    break
+            loop.call_soon_threadsafe(on_eof)
+
+        threading.Thread(target=reader, name="pasture-conpty", daemon=True).start()
+
+    def pause(self) -> None:
+        self.go.clear()
+
+    def resume(self) -> None:
+        self.go.set()
+
+    def stop(self) -> None:
+        self.go.set()  # let the reader see EOF and exit
+
+    def write(self, data: bytes) -> None:
+        if self.proc is not None and self.proc.isalive():
+            self.proc.write(data.decode("utf-8", "replace"))
+
+    def resize(self, cols: int, rows: int) -> None:
+        if (cols, rows) != (self.cols, self.rows) and self.proc is not None:
+            self.cols, self.rows = cols, rows
+            self.proc.setwinsize(rows, cols)
+
+    def poll(self) -> int | None:
+        if self.status is None and self.proc is not None and not self.proc.isalive():
+            self.status = self.proc.exitstatus if self.proc.exitstatus is not None else -1
+        return self.status
+
+    async def terminate(self) -> None:
+        if self.proc is not None and self.proc.isalive():
+            self.proc.terminate(force=True)
+            for _ in range(40):
+                if not self.proc.isalive():
+                    break
+                await asyncio.sleep(0.05)
+        self.poll()
+        self.stop()
+
+
+Pty = WinPty if sys.platform == "win32" else PosixPty
+
+
+class Bridge:
+    """Runs one terminal session over an already-prepared WebSocket."""
+
+    def __init__(self, ws: web.WebSocketResponse, pty, alive, touch):
+        self.ws = ws
+        self.pty = pty
+        self.alive = alive  # () -> bool: is the login session still valid?
+        self.touch = touch  # () -> None: record activity
+        self.loop = asyncio.get_running_loop()
+        self.out: asyncio.Queue[bytes | None] = asyncio.Queue()
+        self.queued = 0
+        self.paused = False
+        self.last_frame = self.loop.time()
+
+    # -- PTY -> WS -------------------------------------------------------
+
+    def _on_data(self, data: bytes) -> None:
         self.queued += len(data)
         self.out.put_nowait(data)
-        if self.queued > HIGH_WATER:
-            self._stop_reading()  # backpressure: resume once the socket drains
+        if self.queued > HIGH_WATER and not self.paused:
+            self.paused = True
+            self.pty.pause()  # backpressure: resume once the socket drains
+
+    def _on_eof(self) -> None:
+        self.out.put_nowait(None)
 
     async def _sender(self) -> None:
         while True:
@@ -177,36 +307,9 @@ class Bridge:
                 return
             self.queued -= len(data)
             await self.ws.send_bytes(data)
-            if not self.reading and self.queued < LOW_WATER and self.pty.status is None:
-                self._start_reading()
-
-    # -- WS -> PTY -------------------------------------------------------
-
-    def _write(self, data: bytes) -> None:
-        self.pending_in += data
-        if len(self.pending_in) > HIGH_WATER:
-            del self.pending_in[: len(self.pending_in) - HIGH_WATER]
-        self._flush_in()
-
-    def _flush_in(self) -> None:
-        while self.pending_in and self.pty.fd >= 0:
-            try:
-                n = os.write(self.pty.fd, self.pending_in)
-            except BlockingIOError:
-                break
-            except OSError:
-                self.pending_in.clear()
-                break
-            del self.pending_in[:n]
-        if self.pending_in and not self.writing and self.pty.fd >= 0:
-            self.loop.add_writer(self.pty.fd, self._on_writable)
-            self.writing = True
-        elif not self.pending_in and self.writing:
-            self.loop.remove_writer(self.pty.fd)
-            self.writing = False
-
-    def _on_writable(self) -> None:
-        self._flush_in()
+            if self.paused and self.queued < LOW_WATER and self.pty.status is None:
+                self.paused = False
+                self.pty.resume()
 
     def _control(self, raw: str) -> None:
         try:
@@ -229,7 +332,7 @@ class Bridge:
             self.last_frame = self.loop.time()
             self.touch()
             if msg.type == WSMsgType.BINARY:
-                self._write(msg.data)
+                self.pty.write(msg.data)
             elif msg.type == WSMsgType.TEXT:
                 self._control(msg.data)
             elif msg.type == WSMsgType.ERROR:
@@ -247,7 +350,7 @@ class Bridge:
 
     async def run(self) -> None:
         self.pty.spawn()
-        self._start_reading()
+        self.pty.start(self.loop, self._on_data, self._on_eof)
         await self.ws.send_str(json.dumps({"t": "hello", "pid": self.pty.pid}))
         sender = asyncio.create_task(self._sender())
         receiver = asyncio.create_task(self._receiver())
@@ -268,9 +371,7 @@ class Bridge:
         finally:
             for task in (sender, receiver, watchdog):
                 task.cancel()
-            self._stop_reading()
-            if self.writing and self.pty.fd >= 0:
-                self.loop.remove_writer(self.pty.fd)
+            self.pty.stop()
             await self.pty.terminate()
             if not self.ws.closed:
                 await self.ws.close()

@@ -3,6 +3,8 @@ terminal. Nothing persists after the terminal closes."""
 
 from __future__ import annotations
 
+import os
+
 from ..config import Config
 
 
@@ -13,7 +15,7 @@ class ShellProvider:
         self.cfg = cfg
 
     def state(self) -> dict:
-        return {"enabled": True, "command": self.cfg.login_shell()[0].rsplit("/", 1)[-1]}
+        return {"enabled": True, "command": os.path.basename(self.cfg.login_shell()[0])}
 
     def argv(self) -> list[str]:
         return self.cfg.login_shell()

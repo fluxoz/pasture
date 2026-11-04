@@ -16,7 +16,8 @@ class CliTest(TempDir, unittest.TestCase):
         first = cli.fresh_token(self.tmp)
         self.assertGreaterEqual(len(first), 40)
         self.assertEqual(cli.fresh_token(self.tmp), first)
-        self.assertEqual(oct((self.tmp / "enroll-token").stat().st_mode & 0o777), "0o600")
+        if os.name == "posix":
+            self.assertEqual(oct((self.tmp / "enroll-token").stat().st_mode & 0o777), "0o600")
         (self.tmp / "token-consumed").write_text(hashlib.sha256(first.encode()).hexdigest() + "\n")
         second = cli.fresh_token(self.tmp)
         self.assertNotEqual(second, first)

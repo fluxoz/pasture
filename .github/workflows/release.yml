@@ -1,0 +1,109 @@
+# Single-file binaries for Linux, macOS and Windows, and a wheel. The web app
+# is built once with Nix and bundled into each. A v* tag publishes a release.
+name: release
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+      - run: |
+          nix build .#web -o web-result
+          cp -rL web-result web
+          chmod -R u+w web
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web
+          path: web
+
+  binaries:
+    needs: web
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-22.04, target: linux-x86_64 }
+          - { os: ubuntu-22.04-arm, target: linux-arm64 }
+          - { os: macos-15, target: macos-arm64 }
+          - { os: macos-15-intel, target: macos-x86_64 }
+          - { os: windows-2022, target: windows-x86_64 }
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+        working-directory: gateway
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          name: web
+          path: gateway/pasture/web
+      - name: Build
+        run: |
+          pip install . pyinstaller
+          extra=()
+          if [ "$RUNNER_OS" = "Windows" ]; then extra=(--collect-all winpty); fi
+          pyinstaller --onefile --name pasture --add-data "pasture/web:pasture/web" \
+            --collect-submodules pasture "${extra[@]}" pasture_entry.py
+      - name: Smoke test
+        run: |
+          ./dist/pasture --help
+          ./dist/pasture tls init --host smoke.example.ts.net --state ./smoke-tls
+          ./dist/pasture serve --host localhost --no-tailscale-serve --port 18795 --state ./smoke &
+          for i in $(seq 60); do curl -sf http://127.0.0.1:18795/auth/info && break; sleep 1; done
+          curl -sf http://127.0.0.1:18795/ | grep -q 'manifest.webmanifest'
+          kill %1 || true
+      - name: Name it
+        run: |
+          mkdir -p ../out
+          if [ "$RUNNER_OS" = "Windows" ]; then cp dist/pasture.exe "../out/pasture-${{ matrix.target }}.exe"
+          else cp dist/pasture "../out/pasture-${{ matrix.target }}"; fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pasture-${{ matrix.target }}
+          path: out/*
+
+  wheel:
+    needs: web
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          name: web
+          path: gateway/pasture/web
+      - run: |
+          pip install build
+          python -m build --wheel --outdir out gateway
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pasture-wheel
+          path: out/*.whl
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [binaries, wheel]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: pasture-*
+          path: out
+          merge-multiple: true
+      - run: |
+          cd out && sha256sum * > SHA256SUMS
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --title "pasture $GITHUB_REF_NAME" --generate-notes ./*
+        env:
+          GH_TOKEN: ${{ github.token }}

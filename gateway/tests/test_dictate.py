@@ -23,6 +23,7 @@ def tone(seconds: float) -> bytes:
     return array("h", (int(8000 * math.sin(2 * math.pi * 440 * i / 16000)) for i in range(n))).tobytes()
 
 
+@unittest.skipIf(sys.platform == "win32", "uses a /bin/sh wrapper")
 class DictationTest(TempDir, unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         static = self.tmp / "static"

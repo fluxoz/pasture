@@ -20,6 +20,7 @@ python3Packages.buildPythonApplication {
   dependencies = with python3Packages; [
     aiohttp
     cryptography
+    segno
     webauthn
   ];
 

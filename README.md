@@ -18,33 +18,35 @@ installed on your phone's home screen.
   machine while you speak; pause, and it types the text and presses Enter.
 - **Know when they finish**: push notifications when an agent needs you or is
   done, even with the app closed. Tap one to open that agent.
-- **Yours**: it runs as your user on your machine. Passkey login (Face ID),
-  one-time QR enrollment, reachable only on your tailnet. No accounts, no
-  telemetry, no CDN.
+- **Yours**: it runs as your user on your machine (Linux, macOS or Windows).
+  Passkey login (Face ID), one-time QR enrollment, reachable only on your
+  tailnet. No accounts, no telemetry, no CDN.
 
 ## Quick start
 
-### Any Linux machine with Nix and Tailscale
+**[The setup guide](docs/setup.md)** walks through everything: Tailscale on
+both ends, HTTPS with Tailscale's certificate or your own CA installed on the
+phone, enrolling, notifications, dictation, and running it as a service.
 
-1. In the Tailscale admin console, turn on **MagicDNS** and **HTTPS
-   certificates** (DNS page).
-2. Once, let your user manage `tailscale serve`:
-   `sudo tailscale set --operator=$USER`
-3. Run it:
+### Linux, macOS, Windows
 
-   ```sh
-   nix run github:fluxoz/pasture
-   # or, with the mic button (whisper.cpp on the CPU):
-   nix run github:fluxoz/pasture#pasture-dictation
-   ```
-
-   It finds your machine's `*.ts.net` name, serves itself there with
-   `tailscale serve`, and prints a QR code.
-4. Scan the QR code with your phone's camera, open the link, tap **Create
+1. Install [Tailscale](https://tailscale.com/download) on the machine and the
+   phone; turn on **MagicDNS** in the admin console.
+2. Download `pasture` for your platform from
+   [Releases](https://github.com/fluxoz/pasture/releases) (or, with Nix,
+   `nix run github:fluxoz/pasture`).
+3. Pick HTTPS: turn on **HTTPS certificates** in the Tailscale admin console,
+   or keep your machine's name private with your own CA:
+   `pasture tls init`, then `pasture tls phone` and scan the QR code to trust
+   it on the phone ([how](docs/setup.md#b-your-own-ca-nothing-public)).
+4. Run `pasture`. It finds your machine's `*.ts.net` name, serves itself on it
+   with `tailscale serve`, and prints a QR code.
+5. Scan the QR code with your phone's camera, open the link, tap **Create
    passkey**. Then Share → **Add to Home Screen**, open the app, tap **Unlock**.
 
-To keep it running, use the home-manager module. `pasture enroll` prints a
-new one-time QR code for another device.
+On Linux, `tailscale serve` needs permission once:
+`sudo tailscale set --operator=$USER`. `pasture enroll` prints a new one-time
+QR code for another device.
 
 ### home-manager (Linux)
 
@@ -134,18 +136,21 @@ owner on a private network. Read [SECURITY.md](SECURITY.md).
 - **Sessions**: `__Host-` cookie (Secure, HttpOnly, SameSite=Strict), 30 min
   idle and 8 h absolute, in memory. Every POST and WebSocket checks `Origin`;
   strict CSP; terminals run a fixed command per target kind.
-- **What leaves the machine**: with `tailscale serve`, the machine's `ts.net`
-  name appears in public Certificate Transparency logs (the nginx frontend
-  with your own certificate avoids that). Push notifications go through the
+- **What leaves the machine**: with Tailscale's certificate, the machine's
+  `ts.net` name appears in public Certificate Transparency logs. Your own CA
+  (`pasture tls init`, or the nginx frontend on NixOS) avoids that; the CA is
+  name-constrained to that one name, so trusting it on the phone risks
+  nothing else. Push notifications go through the
   phone's push service (Apple's for an iPhone), encrypted end to end, so it
   sees only size and timing. Nothing else: dictation audio stays on the
   machine, and fonts and xterm.js are bundled.
 
 ## Requirements
 
-- Linux (x86_64 or aarch64) with Nix, or NixOS. macOS is untested.
-- Tailscale with MagicDNS and HTTPS certificates, or the nginx frontend with a
-  certificate your phone trusts.
+- Linux (x86_64, arm64), macOS (Apple Silicon, Intel) or Windows (x86_64);
+  NixOS and home-manager modules for Nix users. On Windows the terminals are
+  PowerShell and there is no tmux or herdr dashboard.
+- Tailscale with MagicDNS, plus HTTPS certificates or your own CA.
 - A phone browser with passkeys. Push needs iOS 16.4+ with the app installed.
 - Fast dictation wants a GPU build of whisper.cpp (Vulkan or CUDA): the text
   lands about 50 ms after you pause. On a fast CPU it is about half a second.
@@ -185,8 +190,10 @@ All under `services.pasture`; only `enable`, `user` and `hostName` are required.
 ### The `pasture` command
 
 `pasture serve` (the default) takes `--host` (default: the MagicDNS name),
-`--port`, `--https-port`, `--name`, `--state` and `--no-tailscale-serve`.
-`pasture enroll [--new]` prints the QR code. tmux, herdr and `whisper-server`
+`--port`, `--https-port`, `--name`, `--state`, `--no-tailscale-serve` and
+`--tailscale-cert` (ignore your own CA). `pasture enroll [--new]` prints the
+QR code. `pasture tls init [--renew]` makes your own CA and certificate;
+`pasture tls phone` serves the CA for the phone. tmux, herdr and `whisper-server`
 are used when they are on `PATH`; `PASTURE_*` environment variables (see
 [gateway/pasture/config.py](gateway/pasture/config.py)) set the rest.
 
@@ -195,7 +202,9 @@ are used when they are on `PATH`; `PASTURE_*` environment variables (see
 - **"tailscale serve needs permission"**: run
   `sudo tailscale set --operator=$USER` once.
 - **The passkey prompt never appears**: the page needs a trusted HTTPS origin
-  with a domain name. Check that HTTPS certificates are on for the tailnet.
+  with a domain name. Check that HTTPS certificates are on for the tailnet,
+  or, with your own CA, that full trust is on for it (iOS: Settings → General
+  → About → Certificate Trust Settings).
 - **Logged out after an update**: sessions live in memory; unlock again.
 - **Logs**: `journalctl --user -u pasture -f`. Each recording logs its timings
   (never audio or text).

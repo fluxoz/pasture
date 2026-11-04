@@ -5,10 +5,20 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "pasture"
 version = "0.1.0"
-description = "Gateway for pasture: a passkey-gated PWA terminal and session dashboard"
+description = "Your coding agents on your phone: a passkey-gated terminal and agent dashboard on your tailnet"
+readme = { text = "See https://github.com/fluxoz/pasture", content-type = "text/plain" }
 license = { text = "MIT" }
 requires-python = ">=3.11"
-dependencies = ["aiohttp", "cryptography", "webauthn"]
+dependencies = [
+  "aiohttp",
+  "cryptography",
+  "segno",
+  "webauthn",
+  "pywinpty; sys_platform == 'win32'",
+]
+
+[project.urls]
+Homepage = "https://github.com/fluxoz/pasture"
 
 [project.scripts]
 pasture-gateway = "pasture.__main__:main"
@@ -16,3 +26,7 @@ pasture = "pasture.cli:main"
 
 [tool.setuptools]
 packages = ["pasture", "pasture.providers"]
+
+# The built web app (release builds copy it to pasture/web; Nix serves it from the store).
+[tool.setuptools.package-data]
+pasture = ["web/*", "web/**/*"]

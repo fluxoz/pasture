@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import ssl
 import sys
 
 from aiohttp import web
@@ -23,10 +24,15 @@ def main() -> None:
     except ConfigError as e:
         raise SystemExit(f"pasture: {e}")
     gateway = Gateway(cfg)
+    context = None
+    if cfg.tls_cert:
+        context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+        context.load_cert_chain(cfg.tls_cert, cfg.tls_key)
     logging.getLogger("pasture").info(
-        "listening on %s:%d for %s (enrollment %s)",
+        "listening on %s:%d%s for %s (enrollment %s)",
         cfg.bind,
         cfg.port,
+        " with TLS" if context else "",
         cfg.origin,
         "open" if gateway.auth.enrollment_open() else "closed",
     )
@@ -34,6 +40,7 @@ def main() -> None:
         gateway.app(),
         host=cfg.bind,
         port=cfg.port,
+        ssl_context=context,
         print=None,
         access_log=None,
         handle_signals=True,

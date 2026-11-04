@@ -591,7 +591,8 @@ class Gateway:
         peer = request.remote or ""
         forwarded = request.headers.get("X-Forwarded-For") or request.headers.get("X-Real-IP")
         try:
-            ok = ipaddress.ip_address(peer).is_loopback and not forwarded
+            # With our own TLS, tailscale serve forwards TCP and every client looks local.
+            ok = ipaddress.ip_address(peer).is_loopback and not forwarded and not self.cfg.tls_cert
         except ValueError:
             ok = False
         if not ok:

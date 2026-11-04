@@ -1,4 +1,5 @@
 import json
+import sys
 import unittest
 
 from aiohttp import CookieJar
@@ -128,7 +129,9 @@ class AppTest(TempDir, unittest.IsolatedAsyncioTestCase):
         self.assertEqual(r.status, 404)
 
     async def test_shell_terminal(self):
-        self.cfg.shell_command = ["/bin/sh", "-c", "printf 'hi\\n'; read x; printf \"got:%s\" \"$x\""]
+        # Python as the "shell", so the same test drives a POSIX PTY and Windows ConPTY.
+        script = "import sys; print('hi', flush=True); x = sys.stdin.readline().strip(); print('got:' + x, flush=True)"
+        self.cfg.shell_command = [sys.executable, "-c", script]
         await self.login()
         ws = await self.client.ws_connect("/ws/term?k=shell&c=80&r=24", headers={"Origin": ORIGIN})
         hello = json.loads((await ws.receive_str()))
@@ -150,7 +153,7 @@ class AppTest(TempDir, unittest.IsolatedAsyncioTestCase):
         await ws.close()
 
     async def test_pty_cap(self):
-        self.cfg.shell_command = ["/bin/sh", "-c", "sleep 30"]
+        self.cfg.shell_command = [sys.executable, "-c", "import time; time.sleep(30)"]
         await self.login()
         sockets = []
         for _ in range(4):

@@ -4,3 +4,8 @@ __pycache__/
 *.pyc
 node_modules/
 /dev/
+# Release builds copy the built web app here.
+/gateway/pasture/web/
+/gateway/build/
+/gateway/dist/
+*.egg-info/

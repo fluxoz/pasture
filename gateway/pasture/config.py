@@ -8,8 +8,9 @@ from __future__ import annotations
 
 import json
 import os
-import pwd
 import secrets
+import shutil
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -105,6 +106,8 @@ class Config:
     dictate_prompt: str = ""
     dictate_args: list[str] = field(default_factory=list)
     push: bool = True  # Web Push to devices that turn it on
+    tls_cert: Path | None = None  # serve HTTPS ourselves (own CA; tailscale serve forwards TCP)
+    tls_key: Path | None = None
     push_subject: str | None = None  # VAPID contact; default https://<host>
 
     cert_file: Path | None = None
@@ -116,6 +119,14 @@ class Config:
     def login_shell(self) -> list[str]:
         if self.shell_command:
             return list(self.shell_command)
+        if sys.platform == "win32":
+            for name in ("pwsh", "powershell"):
+                found = shutil.which(name)
+                if found:
+                    return [found, "-NoLogo"]
+            return [os.environ.get("COMSPEC", "cmd.exe")]
+        import pwd
+
         shell = os.environ.get("SHELL") or pwd.getpwuid(os.getuid()).pw_shell or "/bin/sh"
         return [shell, "-l"]
 
@@ -159,7 +170,7 @@ def load() -> Config:
         origin=origin.rstrip("/"),
         bind=_env("PASTURE_BIND", "127.0.0.1") or "127.0.0.1",
         port=_int("PASTURE_PORT", 8795),
-        static_dir=_path("PASTURE_STATIC"),
+        static_dir=_path("PASTURE_STATIC") or bundled_web(),
         session_key_file=_path("PASTURE_SESSION_KEY_FILE"),
         enroll_token_file=_path("PASTURE_ENROLL_TOKEN_FILE"),
         credentials_file=_path("PASTURE_CREDENTIALS_FILE"),
@@ -192,6 +203,8 @@ def load() -> Config:
         dictate_prompt=_env("PASTURE_DICTATE_PROMPT", "") or "",
         dictate_args=dictate_args,
         push=_bool("PASTURE_PUSH", True),
+        tls_cert=_path("PASTURE_TLS_CERT"),
+        tls_key=_path("PASTURE_TLS_KEY"),
         push_subject=_env("PASTURE_PUSH_SUBJECT"),
         cert_file=_path("PASTURE_CERT_FILE"),
     )
@@ -211,6 +224,12 @@ def load() -> Config:
     if cfg.dictate and not (cfg.whisper and cfg.whisper_model):
         raise ConfigError("dictation needs PASTURE_DICTATE_SERVER (whisper-server) and PASTURE_DICTATE_MODEL")
     return cfg
+
+
+def bundled_web() -> Path | None:
+    """The web app shipped inside a wheel or a single-file binary, if any."""
+    here = Path(__file__).parent / "web"
+    return here if (here / "index.html").exists() else None
 
 
 def new_token() -> bytes:

@@ -59,6 +59,12 @@ SSH: one owner, a private network, and never the public internet.
   phone for every domain unless it is name-constrained. Keep its key offline
   or encrypted, or use a name-constrained intermediate.
 - A gateway restart logs everyone out (sessions are in memory).
+- `pasture tls init` keeps the CA key in the state dir (0600). The CA is
+  name-constrained to one host name (critical X.509 NameConstraints), so a
+  phone that trusts it trusts nothing else; still, delete or move the CA key
+  if you will not renew certificates on this machine.
+- `pasture tls phone` serves only the public CA certificate, over plain HTTP,
+  bound to the Tailscale IPv4 address, until you stop it.
 - Dictation audio is held in the gateway's memory for one recording and sent
   only to whisper-server on 127.0.0.1 (uploads from older browsers pass
   through a private temporary directory). Audio and text are never logged.
