@@ -232,6 +232,4 @@ bundle builder), `nix/` (packages, theme, NixOS and home-manager modules),
 ## License and credits
 
 MIT. Bundled at build time: xterm.js and addons (MIT), JetBrains Mono and the
-Nerd Fonts symbols (OFL-1.1 / MIT). The demo video's voice was synthesized
-with [Piper](https://github.com/OHF-Voice/piper1-gpl) using the
-`en_US-libritts_r` voice, trained on LibriTTS-R (CC BY 4.0).
+Nerd Fonts symbols (OFL-1.1 / MIT).
