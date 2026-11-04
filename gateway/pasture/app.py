@@ -233,12 +233,22 @@ class Gateway:
         if request.headers.get(CSRF_HEADER) != "1":
             raise web.HTTPForbidden(text=json.dumps({"error": "missing header"}), content_type="application/json")
 
-    async def body_json(self, request: web.Request, limit: int = 64 * 1024) -> dict:
+    @staticmethod
+    async def read_body(request: web.Request, limit: int) -> bytes:
+        """The whole body, refusing more than `limit` bytes. (content.read(n)
+        returns what has arrived so far: over a real network, a first chunk.)"""
         if request.content_length is not None and request.content_length > limit:
             raise web.HTTPRequestEntityTooLarge(max_size=limit, actual_size=request.content_length)
-        raw = await request.content.read(limit + 1)
-        if len(raw) > limit:
-            raise web.HTTPRequestEntityTooLarge(max_size=limit, actual_size=len(raw))
+        chunks, size = [], 0
+        async for chunk in request.content.iter_any():
+            size += len(chunk)
+            if size > limit:
+                raise web.HTTPRequestEntityTooLarge(max_size=limit, actual_size=size)
+            chunks.append(chunk)
+        return b"".join(chunks)
+
+    async def body_json(self, request: web.Request, limit: int = 64 * 1024) -> dict:
+        raw = await self.read_body(request, limit)
         try:
             data = json.loads(raw or b"{}")
         except ValueError:
@@ -565,10 +575,9 @@ class Gateway:
         """An image from the phone; answers with the path to give the agent."""
         self.require(request)
         self.check_csrf(request)
-        if request.content_length is not None and request.content_length > UPLOAD_MAX:
-            return json_error(413, "image too large")
-        data = await request.content.read(UPLOAD_MAX + 1)
-        if len(data) > UPLOAD_MAX:
+        try:
+            data = await self.read_body(request, UPLOAD_MAX)
+        except web.HTTPRequestEntityTooLarge:
             return json_error(413, "image too large")
         try:
             path = self.uploads.save(data)
@@ -585,10 +594,10 @@ class Gateway:
         ctype = (request.content_type or "").lower()
         if not (ctype.startswith("audio/") or ctype == "application/octet-stream"):
             return json_error(415, "send audio")
-        limit = 2 * 1024 * 1024
-        if request.content_length is not None and request.content_length > limit:
+        try:
+            audio = await self.read_body(request, 2 * 1024 * 1024)
+        except web.HTTPRequestEntityTooLarge:
             return json_error(413, "recording too long")
-        audio = await request.content.read(limit + 1)
         try:
             text = await self.dictation.transcribe_upload(audio)
         except DictationError as e:

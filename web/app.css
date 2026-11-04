@@ -317,6 +317,9 @@ select {
 
 .pill {
   flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   height: 20px;
   padding: 0 8px;
   border-radius: 10px;
@@ -328,13 +331,23 @@ select {
   background: var(--crust);
   white-space: nowrap;
 }
-.pill::before { content: "●"; margin-right: 5px; font-size: 9px; vertical-align: 1px; }
+/* The status dot is drawn, not a "●" glyph: a fallback font's metrics pushed that out of the pill on iOS. */
+.pill::before { content: ""; flex: none; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 .pill.working { color: var(--yellow); }
-.pill.working::before { animation: pulse 1.6s ease-in-out infinite; display: inline-block; }
+.pill.working::before { animation: pulse 1.6s ease-in-out infinite; }
 .pill.blocked { color: var(--red); }
-.pill.blocked::before { content: "\f0f3"; font-family: "pasture-icons", "pasture-mono"; font-size: 11px; }
 .pill.done { color: var(--green); }
-.pill.done::before { content: "\f00c"; font-family: "pasture-icons", "pasture-mono"; font-size: 11px; }
+.pill.blocked::before, .pill.done::before {
+  width: auto;
+  height: auto;
+  border-radius: 0;
+  background: none;
+  font-family: "pasture-icons", "pasture-mono";
+  font-size: 11px;
+  line-height: 1;
+}
+.pill.blocked::before { content: "\f0f3"; }
+.pill.done::before { content: "\f00c"; }
 .pill.idle { color: var(--muted); }
 .pill.unknown { color: var(--faint); }
 .pill.attached { color: var(--blue); }

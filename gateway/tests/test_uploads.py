@@ -1,3 +1,4 @@
+import asyncio
 import os
 import time
 import unittest
@@ -56,6 +57,29 @@ class UploadTest(TempDir, unittest.IsolatedAsyncioTestCase):
         self.assertEqual(path.read_bytes(), JPEG)
         if os.name == "posix":
             self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+
+    async def test_a_body_that_arrives_in_pieces_is_kept_whole(self):
+        # Over a real network an upload arrives in chunks; all of them count.
+        await self.login()
+        image = JPEG + os.urandom(300 * 1024) + b"\xff\xd9"
+
+        async def slowly():
+            for i in range(0, len(image), 16 * 1024):
+                yield image[i : i + 16 * 1024]
+                await asyncio.sleep(0.002)
+
+        r = await self.client.post("/api/upload", data=slowly(), headers={**POST, "Content-Type": "image/jpeg"})
+        self.assertEqual(r.status, 200)
+        self.assertEqual(Path((await r.json())["path"]).read_bytes(), image)
+
+        async def too_much():
+            yield PNG
+            for _ in range(MAX_BYTES // (64 * 1024) + 2):  # no Content-Length to go by
+                yield b"\x00" * 64 * 1024
+                await asyncio.sleep(0)
+
+        r = await self.client.post("/api/upload", data=too_much(), headers=POST)
+        self.assertEqual(r.status, 413)
 
     async def test_refuses_what_is_not_an_image(self):
         await self.login()

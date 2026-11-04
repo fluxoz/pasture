@@ -4,7 +4,7 @@
 { lib, python3Packages }:
 python3Packages.buildPythonApplication {
   pname = "pasture-gateway";
-  version = "0.5.0";
+  version = "0.5.1";
   pyproject = true;
 
   src = lib.fileset.toSource {
