@@ -9,3 +9,7 @@ node_modules/
 /gateway/build/
 /gateway/dist/
 *.egg-info/
+# Demo videos are published elsewhere, never committed.
+*.mp4
+*.mov
+*.webm

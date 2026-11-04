@@ -6,8 +6,6 @@ installed on your phone's home screen.
 
 ![The dashboard, live dictation and an agent finishing a task](docs/screenshots.png)
 
-▶ [35-second demo video](docs/demo.mp4)
-
 - **See every agent at a glance**: which [herdr](https://herdr.dev) agent is
   working, done or needs you, with its last lines of output, plus your tmux
   sessions.
