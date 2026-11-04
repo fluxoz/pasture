@@ -33,12 +33,13 @@ class HooksTest(TempDir, unittest.TestCase):
         path = self.tmp / "settings.json"
         uploads = Path.home() / ".local" / "state" / "pasture" / "uploads"
         install.install_claude_hooks(path, CMD, uploads=uploads)
-        allow = json.loads(path.read_text())["permissions"]["allow"]
+        data = json.loads(path.read_text())
         if os.name == "posix":
-            self.assertEqual(allow, ["Read(~/.local/state/pasture/uploads/**)"])
+            self.assertEqual(data["permissions"]["allow"], ["Read(~/.local/state/pasture/uploads/**)"])
+            self.assertEqual(install.uploads_rule(Path("/srv/pasture/uploads")), "Read(//srv/pasture/uploads/**)")
+        else:  # Claude Code's path rules differ on Windows; no rule there
+            self.assertNotIn("permissions", data)
         self.assertFalse(install.install_claude_hooks(path, CMD, uploads=uploads))
-        self.assertEqual(install.uploads_rule(Path("/srv/pasture/uploads")) if os.name == "posix" else None,
-                         "Read(//srv/pasture/uploads/**)" if os.name == "posix" else None)
 
     def test_fresh_settings_and_grok(self):
         path = self.tmp / "new" / "settings.json"
