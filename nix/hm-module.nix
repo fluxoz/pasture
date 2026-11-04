@@ -68,6 +68,22 @@ in
       default = true;
       description = "Configure `tailscale serve` (needs `sudo tailscale set --operator=$USER` once).";
     };
+    hooks = {
+      claude = mkOption {
+        type = types.bool;
+        default = false;
+        description = ''
+          Claude Code sessions alert the phone: on every switch, merge pasture's hooks
+          (and the read permission for images from the phone) into ~/.claude/settings.json.
+          Your other settings are kept.
+        '';
+      };
+      grok = mkOption {
+        type = types.bool;
+        default = false;
+        description = "Grok Build sessions alert the phone (~/.grok/hooks/pasture.json).";
+      };
+    };
     environment = mkOption {
       type = types.attrsOf types.str;
       default = { };
@@ -80,6 +96,13 @@ in
 
   config = mkIf cfg.enable {
     home.packages = [ cfg.package ];
+    # The hooks run the profile's pasture, a path that survives updates.
+    home.activation.pastureHooks = mkIf (cfg.hooks.claude || cfg.hooks.grok) (
+      lib.hm.dag.entryAfter [ "writeBoundary" ] ''
+        ${lib.optionalString cfg.hooks.claude "run ${lib.getExe cfg.package} hooks claude --install --command ${config.home.profileDirectory}/bin/pasture"}
+        ${lib.optionalString cfg.hooks.grok "run ${lib.getExe cfg.package} hooks grok --install --command ${config.home.profileDirectory}/bin/pasture"}
+      ''
+    );
     # So `pasture enroll`, `link` and `notify` in a shell find this service.
     home.sessionVariables = {
       PASTURE_PORT = toString cfg.port;

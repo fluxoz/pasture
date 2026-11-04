@@ -147,3 +147,44 @@ class TlsTest(TempDir, unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(SystemExit) as e:
             await asyncio.to_thread(cli.main, ["machines", "add", code, "--state", str(hub_state)])
         self.assertIn("refused the link", str(e.exception))
+
+    async def test_join_checks_the_hub_by_its_fingerprint(self):
+        import contextlib
+        import io
+
+        from pasture.app import Gateway
+
+        from .helpers import make_config
+
+        async def serve_gateway(gateway, cert):
+            ctx = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+            ctx.load_cert_chain(cert["cert"], cert["key"])
+            runner = web.AppRunner(gateway.app(), shutdown_timeout=0.5)
+            await runner.setup()
+            site = web.TCPSite(runner, "127.0.0.1", 0, ssl_context=ctx)
+            await site.start()
+            self.addAsyncCleanup(runner.cleanup)
+            return site._server.sockets[0].getsockname()[1]
+
+        (self.tmp / "hub").mkdir()
+        (self.tmp / "node").mkdir()
+        hub_cfg = make_config(self.tmp / "hub", static_dir=self.tmp, push=False)
+        hub_tls = tls.init(hub_cfg.state_dir, "localhost")
+        hub_cfg.cert_file = hub_tls["cert"]  # its own certificate: codes carry its fingerprint
+        node_cfg = make_config(self.tmp / "node", static_dir=self.tmp, push=False)
+        node_tls = tls.init(node_cfg.state_dir, "localhost")
+        hub = Gateway(hub_cfg)
+        hub_port = await serve_gateway(hub, hub_tls)
+        node_port = await serve_gateway(Gateway(node_cfg), node_tls)
+        pin = machines.pin_of_file(hub_tls["cert"])
+        argv = ["join", f"localhost:{hub_port}", "", "--host", "localhost", "--https-port", str(node_port), "--port", str(node_port), "--state", str(node_cfg.state_dir)]
+        argv[2] = machines.format_code(hub.invites.create() + "Z" * machines.PIN_LEN)  # a fingerprint that is not the hub's
+        with self.assertRaises(SystemExit) as e:
+            await asyncio.to_thread(cli.main, argv)
+        self.assertIn("not the machine that made this code", str(e.exception))
+        argv[2] = machines.format_code(hub.invites.create() + pin)
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            await asyncio.to_thread(cli.main, argv)
+        self.assertIn("Added localhost", out.getvalue())
+        entry = hub.machines.registry.load()[0]
+        self.assertEqual((entry["url"], entry["ca"]), (f"https://localhost:{node_port}", node_tls["ca"].read_text()))

@@ -94,8 +94,9 @@ def install_claude_hooks(path: Path | None = None, cmd: list[str] | None = None,
     changed = False
     for event, entries in claude_hooks(cmd).items():
         existing = hooks.setdefault(event, [])
-        if not _has_ours(existing):
-            existing.extend(entries)
+        ours = [e for e in existing if _has_ours([e])]
+        if ours != entries:  # missing, or pointing at an older pasture (a moved binary, a Nix update)
+            existing[:] = [e for e in existing if not _has_ours([e])] + entries
             changed = True
     rule = uploads_rule(uploads) if uploads else None
     if rule:
@@ -112,8 +113,12 @@ def install_claude_hooks(path: Path | None = None, cmd: list[str] | None = None,
     return changed
 
 
+def grok_hooks_path(home: Path | None = None) -> Path:
+    return (home or Path.home()) / ".grok" / "hooks" / "pasture.json"
+
+
 def install_grok_hooks(home: Path | None = None, cmd: list[str] | None = None) -> Path:
-    path = (home or Path.home()) / ".grok" / "hooks" / "pasture.json"
+    path = grok_hooks_path(home)
     path.parent.mkdir(parents=True, exist_ok=True)
     # Grok Build has no permission-prompt event, so only the end of a turn alerts.
     path.write_text(json.dumps({"hooks": {"Stop": [{"hooks": [hook("grok", "stop", cmd)]}]}}, indent=2) + "\n")

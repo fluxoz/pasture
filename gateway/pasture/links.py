@@ -71,20 +71,23 @@ def decode_code(code: str) -> dict:
 class Links:
     def __init__(self, path: Path):
         self.path = path
-        self._cache: tuple[float, list[dict]] = (-1.0, [])
+        self._cache: tuple[tuple, list[dict]] = ((), [])
         self._sessions: dict[str, LinkSession] = {}
 
     def load(self) -> list[dict]:
         try:
-            mtime = self.path.stat().st_mtime
+            st = self.path.stat()
         except FileNotFoundError:
             return []
-        if mtime != self._cache[0]:
+        # Every save replaces the file (a new inode / file ID): the time alone can
+        # repeat within one clock tick (Windows), and a revoke must never be missed.
+        key = (st.st_ino, st.st_size, st.st_mtime_ns)
+        if key != self._cache[0]:
             try:
                 data = json.loads(self.path.read_text())
-                self._cache = (mtime, [d for d in data if isinstance(d, dict) and "hash" in d and "name" in d])
+                self._cache = (key, [d for d in data if isinstance(d, dict) and "hash" in d and "name" in d])
             except ValueError:
-                self._cache = (mtime, [])
+                self._cache = (key, [])
         return self._cache[1]
 
     def _save(self, links: list[dict]) -> None:
@@ -94,6 +97,7 @@ class Links:
         with os.fdopen(fd, "w") as f:
             json.dump(links, f, indent=1)
         os.replace(tmp, self.path)
+        self._cache = ((), [])
 
     def create(self, name: str) -> str:
         """A new token for `name` (replacing an old one of that name)."""

@@ -97,10 +97,10 @@ after every step and work through what is left.
    they were installed.
 10. **More machines (optional).** The phone keeps one app; one machine (the
    hub, usually the first) reaches the others. On each other machine, steps
-   1-4 and 7, no enrolling. Then `pasture link` there prints
-   `pasture machines add <code>`: run that on the hub (ask first; the code is
-   a credential, like the enrollment link: show it to no one else, and pass it
-   between machines yourself if you run on both, or have the user paste it).
+   1-4 and 7, no enrolling. Then the user taps the machine name on the phone
+   → **Add a machine**, and you run the `pasture join <hub> <code>` it shows
+   on the new machine (the code is a one-time credential: use it, never log or
+   share it). Then they hold the machine there to turn on its agents' alerts.
    Details: [docs/machines.md](docs/machines.md).
 
 ## Working on this repository

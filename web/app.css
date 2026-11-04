@@ -81,6 +81,9 @@ button { cursor: pointer; }
   text-overflow: ellipsis;
   letter-spacing: .02em;
 }
+/* On the dashboard the name opens the machines sheet. */
+#app[data-view="dash"] .title { cursor: pointer; }
+#app[data-view="dash"] .title::after { content: "\f0140"; font-family: "pasture-icons"; font-weight: 400; margin-left: 4px; color: var(--faint); }
 .conn { flex: 0 0 auto; width: 8px; height: 8px; border-radius: 50%; background: transparent; }
 .conn.up { background: var(--green); }
 .conn.down { background: var(--red); }
@@ -575,6 +578,24 @@ select {
 .sheet .item:active { background: var(--surface1); }
 .sheet .item .nf { width: 26px; font-size: 22px; text-align: center; color: var(--accent); }
 .sheet .item.danger, .sheet .item.danger .nf { color: var(--red); }
+.sheet .machine-row .label { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; text-align: left; }
+.sheet .machine-row .meta { color: var(--subtext); font-size: 13px; }
+.sheet .machine-row > .nf:first-child { color: var(--faint); }
+.sheet .machine-row.live > .nf:first-child { color: var(--green); }
+.sheet .machine-row .mark { margin-left: auto; color: var(--accent); }
+.join-cmd {
+  display: block;
+  margin: 4px 16px 12px;
+  padding: 14px 16px;
+  border-radius: 12px;
+  background: var(--crust);
+  color: var(--bright);
+  font-size: 15px;
+  line-height: 1.5;
+  overflow-wrap: anywhere; /* between words first: the code stays whole */
+  -webkit-user-select: text;
+  user-select: text;
+}
 .sheet .item .fill {
   position: absolute;
   inset: 0;

@@ -11,6 +11,7 @@ import logging
 import mimetypes
 import os
 import time
+from urllib.parse import urlsplit
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -29,7 +30,7 @@ from .providers.shell import ShellProvider
 from .providers.tmux import TmuxProvider
 from .pty_bridge import CLOSE_EXPIRED, MAX_PTYS_PER_SESSION, Bridge, Pty, clamp_size
 from .links import Links
-from .machines import Machines
+from .machines import INVITE_TTL, TOKEN_LEN, Invites, Machines, check_name, format_code, loopback, normalize_code, pin_of_file
 from .updates import Updater
 from .push import Push, PushError
 from .uploads import MAX_BYTES as UPLOAD_MAX, Uploads
@@ -166,6 +167,7 @@ class Gateway:
         # Machines this one is the hub for: their state and alerts come here.
         self.machines = Machines(cfg.state_dir / "machines.json", self.hub, self.alerts.add)
         self.hub.register(self.machines.name, self.machines.state)
+        self.invites = Invites()  # "Add a machine" codes
         # New releases: checked, installed when no terminal is open, then a restart.
         self.restart_requested = False
         self._main: asyncio.Task | None = None
@@ -707,7 +709,113 @@ class Gateway:
 
     # -- other machines (this one is their hub) -------------------------------
 
-    PROXY_API = frozenset({"action", "preview", "projects", "upload", "update"})
+    PROXY_API = frozenset({"action", "preview", "projects", "upload", "update", "hooks"})
+
+    def require_person(self, request: web.Request):
+        """A passkey session: not a hub's link."""
+        session = self.require(request)
+        if getattr(session, "link", False):
+            raise web.HTTPForbidden(text=json.dumps({"error": "not for links"}), content_type="application/json")
+        return session
+
+    async def api_machines_invite(self, request: web.Request) -> web.Response:
+        """A one-time code for `pasture join` on a new machine (Add a machine)."""
+        self.require_person(request)
+        self.check_csrf(request)
+        token = self.invites.create()
+        pin = ""
+        if self.cfg.cert_file and Path(self.cfg.cert_file).exists():
+            try:  # our certificate is our own: the new machine checks it against this
+                pin = pin_of_file(Path(self.cfg.cert_file))
+            except (OSError, ValueError):
+                pin = ""
+        where = urlsplit(self.cfg.origin)
+        host = (where.hostname or self.cfg.host).split(".")[0]  # `pasture join` finds the full name
+        if where.port and where.port != 443:
+            host += f":{where.port}"
+        code = format_code(token + pin)
+        return web.json_response({"code": code, "command": f"pasture join {host} {code}", "expires": INVITE_TTL})
+
+    async def api_machines_join(self, request: web.Request) -> web.Response:
+        """A machine adding itself (`pasture join HUB CODE`): the code is its only credential."""
+        try:
+            self._limit(request)
+        except AuthError as e:
+            return json_error(e.status, str(e))
+        body = await self.body_json(request, 256 * 1024)
+        token = normalize_code(str(body.get("code") or ""))[:TOKEN_LEN]
+        if not self.invites.valid(token):
+            self.auth.limiter.failure()
+            log.warning("machine join refused from %s: wrong or expired code", remote_addr(request))
+            return json_error(403, "that code is wrong or expired: make a new one on the phone")
+        try:
+            name = check_name(str(body.get("name") or ""))
+            url = str(body.get("url") or "").rstrip("/")
+            link_token = str(body.get("token") or "")
+            ca = body.get("ca") or None
+            if not (url.startswith("https://") or loopback(url)) or len(link_token) < 32 or not isinstance(ca, (str, type(None))):
+                raise ValueError("incomplete join request")
+        except ValueError as e:
+            return json_error(400, str(e))
+        same = [e for e in self.machines.registry.load() if e["name"] == name]
+        if same and same[0]["url"] != url:
+            return json_error(409, f"another machine is called {name} here: pass --name")
+        try:
+            await self.machines.check(url, link_token, ca)
+        except ValueError as e:
+            return json_error(502, str(e))
+        if not self.invites.take(token):
+            return json_error(403, "that code was just used")
+        self.machines.registry.add(name, url, link_token, ca)
+        self.machines.sync()
+        log.info("machine %s joined (%s)", name, url)
+        return web.json_response({"ok": True, "name": name, "hub": self.cfg.app_name})
+
+    async def api_machines_remove(self, request: web.Request) -> web.Response:
+        """Stop reaching a machine, and have it revoke our link."""
+        self.require_person(request)
+        self.check_csrf(request)
+        name = str((await self.body_json(request)).get("name") or "")
+        if not any(e["name"] == name for e in self.machines.registry.load()):
+            return json_error(404, "no such machine")
+        unlinked = await self.machines.unlink(name)
+        self.machines.registry.remove(name)
+        self.machines.sync()
+        log.info("machine %s removed%s", name, "" if unlinked else " (it was not reachable to revoke the link)")
+        return web.json_response({"ok": True, "unlinked": unlinked})
+
+    async def api_hooks(self, request: web.Request) -> web.Response:
+        """Agent hooks that report here (the alerts): seen, and installed, from the phone.
+        POST {agent: claude|grok}. Anyone with a session has a shell here anyway."""
+        from . import install
+
+        self.require(request)
+        if request.method == "POST":
+            self.check_csrf(request)
+            agent = (await self.body_json(request)).get("agent")
+            try:
+                if agent == "claude":
+                    await asyncio.to_thread(install.install_claude_hooks, None, None, self.uploads.dir)
+                elif agent == "grok":
+                    await asyncio.to_thread(install.install_grok_hooks)
+                else:
+                    return json_error(400, "agent is claude or grok")
+            except (OSError, ValueError) as e:
+                return json_error(500, f"could not write the hooks: {e}")
+            log.info("agent hooks installed: %s", agent)
+        managed = install.MANAGED_HOOKS.exists()
+        return web.json_response(
+            {"claude": install.claude_hooks_installed(), "grok": install.grok_hooks_path().exists(), "managed": managed}
+        )
+
+    async def api_unlink(self, request: web.Request) -> web.Response:
+        """A hub giving up its link here (the machine was removed on the phone)."""
+        session = self.require(request)
+        if not getattr(session, "link", False):
+            return json_error(403, "only a linked hub can unlink itself")
+        self.links.revoke(session.name)
+        log.info("link %s removed by its hub", session.name)
+        return web.json_response({"ok": True})
 
     async def proxy_api(self, request: web.Request) -> web.Response:
         """/m/<name>/api/<action|preview|projects|upload>, forwarded with that machine's link token."""
@@ -874,6 +982,12 @@ class Gateway:
         r.add_post("/api/push/test", self.api_push_test)
         r.add_post("/api/presence", self.api_presence)
         r.add_post("/api/notify", self.api_notify)
+        r.add_post("/api/machines/invite", self.api_machines_invite)
+        r.add_post("/api/machines/join", self.api_machines_join)
+        r.add_post("/api/machines/remove", self.api_machines_remove)
+        r.add_post("/api/unlink", self.api_unlink)
+        r.add_get("/api/hooks", self.api_hooks)
+        r.add_post("/api/hooks", self.api_hooks)
         r.add_get("/api/update", self.api_update)
         r.add_post("/api/update", self.api_update)
         r.add_get("/ws/term", self.ws_term)

@@ -11,11 +11,17 @@ actions, previews, uploads and terminals to it (app.py, /m/<name>/...).
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
+import ipaddress
 import json
 import logging
 import os
 import re
+import secrets
 import ssl
+import time
+from urllib.parse import urlsplit
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -28,6 +34,88 @@ log = logging.getLogger("pasture.machines")
 
 NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
 RELOAD_EVERY = 3.0
+
+
+# Join codes ("Add a machine" on the phone): a one-time token, plus a short
+# fingerprint of the hub's certificate when that is not publicly trusted.
+ALPHABET = "ABCDEFGHJKMNPQRSTVWXYZ23456789"  # no 0/O, 1/I/L, U
+TOKEN_LEN = 12
+PIN_LEN = 8
+INVITE_TTL = 15 * 60
+
+
+def _encode(data: bytes, length: int) -> str:
+    n = int.from_bytes(data, "big")
+    out = []
+    for _ in range(length):
+        n, r = divmod(n, len(ALPHABET))
+        out.append(ALPHABET[r])
+    return "".join(out)
+
+
+def pin_of_der(der: bytes) -> str:
+    return _encode(hashlib.sha256(der).digest(), PIN_LEN)
+
+
+def pin_of_file(path: Path) -> str:
+    """The fingerprint of the first certificate in a PEM file (the one served)."""
+    pem = path.read_text()
+    first = pem[: pem.index("-----END CERTIFICATE-----") + len("-----END CERTIFICATE-----")]
+    return pin_of_der(ssl.PEM_cert_to_DER_cert(first))
+
+
+def normalize_code(code: str) -> str:
+    return re.sub(r"[\s-]", "", code).upper()
+
+
+def format_code(code: str) -> str:
+    return "-".join(code[i : i + 4] for i in range(0, len(code), 4))
+
+
+def loopback(url: str) -> bool:
+    host = urlsplit(url).hostname or ""
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+class Invites:
+    """Open join codes, in memory: a restart cancels them."""
+
+    def __init__(self, clock=time.monotonic):
+        self._open: dict[str, float] = {}  # sha256(token) -> expiry
+        self._clock = clock
+
+    def _prune(self) -> None:
+        now = self._clock()
+        for k in [k for k, exp in self._open.items() if exp <= now]:
+            del self._open[k]
+
+    def create(self) -> str:
+        self._prune()
+        while len(self._open) >= 5:  # a handful at most
+            del self._open[min(self._open, key=self._open.get)]
+        token = "".join(secrets.choice(ALPHABET) for _ in range(TOKEN_LEN))
+        self._open[hashlib.sha256(token.encode()).hexdigest()] = self._clock() + INVITE_TTL
+        return token
+
+    def _find(self, token: str) -> str | None:
+        self._prune()
+        digest = hashlib.sha256(token.encode()).hexdigest()
+        return next((k for k in self._open if hmac.compare_digest(k, digest)), None)
+
+    def valid(self, token: str) -> bool:
+        return self._find(token) is not None
+
+    def take(self, token: str) -> bool:
+        key = self._find(token)
+        if key is None:
+            return False
+        del self._open[key]
+        return True
 
 
 def check_name(name: str) -> str:
@@ -215,6 +303,33 @@ class Machines:
             if name not in self.remotes:
                 self.remotes[name] = Remote(self, entry)
                 self.hub.changed()
+
+    async def check(self, url: str, token: str, ca: str | None) -> None:
+        """Does the machine answer with this token? (Before adding it.)"""
+        try:
+            async with self.http.get(
+                url + "/api/state", headers={"Authorization": f"Bearer {token}"}, ssl=ssl_context(ca), timeout=aiohttp.ClientTimeout(total=10)
+            ) as r:
+                if r.status != 200:
+                    raise ValueError(f"{url} refused its own link ({r.status})")
+        except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as e:
+            raise ValueError(f"the hub cannot reach {url}: is pasture running there, as a service?") from e
+
+    async def unlink(self, name: str) -> bool:
+        """Ask a machine to revoke our link (best effort)."""
+        entry = next((e for e in self.registry.load() if e["name"] == name), None)
+        if entry is None:
+            return False
+        try:
+            async with self.http.post(
+                entry["url"] + "/api/unlink",
+                headers={"Authorization": f"Bearer {entry['token']}"},
+                ssl=ssl_context(entry.get("ca")),
+                timeout=aiohttp.ClientTimeout(total=5),
+            ) as r:
+                return r.status == 200
+        except (aiohttp.ClientError, asyncio.TimeoutError, OSError):
+            return False
 
     async def start(self) -> None:
         self.http = aiohttp.ClientSession()

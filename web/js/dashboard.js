@@ -50,7 +50,7 @@ function setText(node, text) {
 }
 
 /** Tap vs long-press on a card. Long-press opens the card's sheet. */
-function pressable(node, { onTap, onHold }) {
+export function pressable(node, { onTap, onHold }) {
   let timer = 0;
   let held = false;
   let origin = null;

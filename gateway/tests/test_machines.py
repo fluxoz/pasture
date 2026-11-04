@@ -1,13 +1,15 @@
 import asyncio
 import json
+import os
 import sys
 import unittest
+from unittest import mock
 
 import aiohttp
 from aiohttp import CookieJar
 from aiohttp.test_utils import TestClient, TestServer
 
-from pasture import links, machines
+from pasture import install, links, machines
 from pasture.app import Gateway
 
 from .helpers import HOST, ORIGIN, TempDir, make_config
@@ -33,6 +35,14 @@ class LinkCodeTest(TempDir, unittest.TestCase):
             links.decode_code("pasture-link:" + "garbage")
         self.assertTrue(store.revoke("hub"))
         self.assertIsNone(store.session(token))
+        # Another process (the gateway) sees a revoke at once, even within one clock tick.
+        other = links.Links(self.tmp / "links.json")
+        token = store.create("hub")
+        self.assertIsNotNone(other.session(token))
+        stamp = (self.tmp / "links.json").stat().st_mtime_ns
+        store.revoke("hub")
+        os.utime(self.tmp / "links.json", ns=(stamp, stamp))  # same time as before the revoke
+        self.assertIsNone(other.session(token))
 
     def test_states_do_not_nest(self):
         self.assertEqual(machines.own_state({"herdr": 1, "machines": [{"name": "hub", "state": {}}]}), {"herdr": 1})
@@ -185,3 +195,45 @@ class HubTest(TempDir, unittest.IsolatedAsyncioTestCase):
         async with asyncio.timeout(10):  # the hub sees the machine's update state
             while (await self.connected())["state"].get("update", {}).get("mode") != self.node.updates.state()["mode"]:
                 await asyncio.sleep(0.05)
+
+    async def test_add_a_machine_with_a_code(self):
+        await self.connected()
+        r = await self.client.post("/api/machines/invite", json={}, headers=POST)
+        self.assertEqual(r.status, 401)
+        await self.login()
+        r = await self.client.post("/api/machines/invite", json={}, headers=POST)
+        invite = await r.json()
+        self.assertTrue(invite["command"].startswith("pasture join ") and invite["command"].endswith(invite["code"]))
+        url = str(self.node_server.make_url("")).rstrip("/")
+        token = self.node.links.create("hub2")
+        join = {"code": invite["code"], "name": "box2", "url": url, "token": token}
+        r = await self.client.post("/api/machines/join", json={**join, "code": "AAAA-AAAA-AAAA"})
+        self.assertEqual(r.status, 403)
+        r = await self.client.post("/api/machines/join", json={**join, "name": "box", "url": "http://127.0.0.1:9"})
+        self.assertEqual(r.status, 409)  # another machine has that name
+        r = await self.client.post("/api/machines/join", json={**join, "url": "https://example.com"})
+        self.assertEqual(r.status, 502)  # the hub checks the machine answers first
+        r = await self.client.post("/api/machines/join", json=join)
+        self.assertEqual(r.status, 200)
+        r = await self.client.post("/api/machines/join", json=join)
+        self.assertEqual(r.status, 403)  # once only
+        async with asyncio.timeout(10):
+            while not any(m["name"] == "box2" and m["connected"] for m in self.hub.machines.state()):
+                await asyncio.sleep(0.05)
+        r = await self.client.post("/api/machines/remove", json={"name": "box2"}, headers=POST)
+        self.assertEqual((r.status, (await r.json())["unlinked"]), (200, True))
+        self.assertFalse(self.node.links.active("hub2"))  # the machine revoked the hub's link
+        self.assertNotIn("box2", [e["name"] for e in self.hub.machines.registry.load()])
+
+    async def test_agent_hooks_from_the_phone(self):
+        await self.connected()
+        await self.login()
+        home = self.tmp / "home"
+        env = {"HOME": str(home), "USERPROFILE": str(home), "CLAUDE_CONFIG_DIR": str(home / ".claude")}  # never the real settings
+        with mock.patch.dict(os.environ, env), mock.patch.object(install, "MANAGED_HOOKS", self.tmp / "none.json"):
+            r = await self.client.get("/m/box/api/hooks")
+            self.assertEqual((await r.json())["claude"], False)
+            r = await self.client.post("/m/box/api/hooks", json={"agent": "claude"}, headers=POST)  # on that machine, through the hub
+            self.assertEqual((await r.json())["claude"], True)
+            r = await self.client.post("/m/box/api/hooks", json={"agent": "codex"}, headers=POST)
+            self.assertEqual(r.status, 400)

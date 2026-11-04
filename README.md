@@ -21,8 +21,8 @@ installed on your phone's home screen.
   agent. herdr agents report on their own; any other agent (Claude Code
   hooks, scripts) with `pasture notify`. No Apple Developer account and no
   third-party notification app.
-- **All your machines**: run it on each, link them to one (`pasture link`),
-  and the phone keeps one app: a chip per machine on the dashboard, every
+- **All your machines**: run it on each and add them from the phone (one
+  short command per machine), and the phone keeps one app: a chip per machine on the dashboard, every
   machine's alerts in one place, and every machine's updates (they install
   themselves from the releases, or tap Update).
 - **Yours**: it runs as your user on your machine (Linux, macOS or Windows).
@@ -181,7 +181,8 @@ All under `services.pasture`; only `enable`, `user` and `hostName` are required.
 | `pasture hooks claude\|grok [--install]` | Agent hooks that report to pasture. |
 | `pasture notify [--kind done\|blocked\|info] [--agent A] [--project P] TEXT` | Send an alert (`--hook AGENT EVENT` reads a hook's JSON on stdin). |
 | `pasture doctor [--json]` | Check everything; print fixes. |
-| `pasture link [--name N] [--ca FILE]` / `--list` / `--revoke N` | Let a hub reach this machine ([several machines](docs/machines.md)). |
+| `pasture join HUB CODE` | Add this machine to your hub, with the code from the phone (tap the name → Add a machine). |
+| `pasture link [--name N] [--ca FILE]` / `--list` / `--revoke N` | Let a hub reach this machine without the phone ([several machines](docs/machines.md)). |
 | `pasture machines add CODE [--name N]` / `list` / `remove N` | On the hub: the machines the phone reaches through it. |
 | `pasture update [--check]` / `--mode auto\|notify\|off` | Update a release binary now, check, or choose automatic updates ([details](docs/setup.md#day-to-day)). |
 

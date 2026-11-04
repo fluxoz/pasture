@@ -28,6 +28,13 @@ class HooksTest(TempDir, unittest.TestCase):
         self.assertEqual(json.loads((self.tmp / "settings.json.pasture-backup").read_text()), mine)
         self.assertFalse(install.install_claude_hooks(path, CMD))  # already there
         self.assertTrue(install.claude_hooks_installed(path))
+        # A newer pasture elsewhere (a Nix update, a moved binary): ours are replaced, not added.
+        self.assertTrue(install.install_claude_hooks(path, ["/new/bin/pasture"]))
+        data = json.loads(path.read_text())
+        self.assertEqual(len(data["hooks"]["Stop"]), 2)
+        self.assertIn("/new/bin/pasture notify --hook claude stop", json.dumps(data))
+        self.assertNotIn("/opt/pasture", json.dumps(data))
+        self.assertIn("say done", json.dumps(data))
 
     def test_uploads_permission(self):
         path = self.tmp / "settings.json"

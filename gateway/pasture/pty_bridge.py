@@ -230,10 +230,18 @@ class WinPty:
                 except OSError:
                     break
                 if text:
-                    loop.call_soon_threadsafe(on_data, text.encode("utf-8", "replace"))
+                    if not deliver(on_data, text.encode("utf-8", "replace")):
+                        return
                 elif not self.proc.isalive():
                     break
-            loop.call_soon_threadsafe(on_eof)
+            deliver(on_eof)
+
+        def deliver(callback, *args) -> bool:
+            try:
+                loop.call_soon_threadsafe(callback, *args)
+                return True
+            except RuntimeError:  # the event loop is gone (shutting down)
+                return False
 
         threading.Thread(target=reader, name="pasture-conpty", daemon=True).start()
 

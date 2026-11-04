@@ -12,6 +12,7 @@ import { pushSupport, currentSubscription, enablePush, disablePush, testPush, pu
 import { openSheet, closeSheet, item, items, tiles, tile, section, toggle, choice, stepper, note } from './sheet.js';
 import { $, el, G, toast, storage, store, vibrate } from './util.js';
 import { updatesSheet, refreshUpdates, pendingUpdates } from './updates.js';
+import { machinesSheet, machinesChanged } from './machines.js';
 
 const app = $('#app');
 const login = new Login();
@@ -651,6 +652,7 @@ function wire() {
     if (name) openTerm({ k: 'tmux', t: name, title: name, m: dash.machine || undefined });
   });
   $('#act-menu').addEventListener('click', () => (app.dataset.view === 'term' ? termMenu() : dashMenu()));
+  $('#title').addEventListener('click', () => app.dataset.view === 'dash' && machinesSheet(dash));
   $('#term-reconnect').addEventListener('click', () => term?.reconnect());
   window.addEventListener('popstate', () => {
     if (term && history.state?.term !== true) closeTerm(true);
@@ -682,6 +684,7 @@ function wire() {
     onState: (state) => {
       dash.update(state);
       refreshUpdates();
+      machinesChanged(state);
       updateBadges(state);
     },
     onAlert: (a) => {

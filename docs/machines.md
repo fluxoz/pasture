@@ -4,6 +4,11 @@ Run pasture on every machine with agents, and keep one app on the phone: one
 passkey, one home-screen icon, one set of notifications. The phone uses one of
 them, the **hub**; the hub reaches the others over your tailnet.
 
+The hub is simply the machine the phone enrolled on (usually the first you set
+up). Pick one that is always on: when it is off, the phone cannot reach the
+others either. The other machines need no passkey and nothing on the phone;
+they trust the hub through a link token they issued.
+
 ```text
 phone ──passkey──▶ hub (pasture) ──link token──▶ box  (pasture)
                                   ──link token──▶ mini (pasture)
@@ -16,29 +21,32 @@ machine's terminal. Every machine's alerts reach the phone through the hub,
 labelled with the machine (`box: api needs you`), and tapping one opens that
 agent on that machine.
 
-## Set it up
+## Add a machine
 
-1. Set up the hub as usual ([docs/setup.md](setup.md)): pick the machine that
-   is on most, enroll the phone, turn on push notifications.
-2. On each other machine, install and run pasture the same way (as a service),
-   but skip enrolling and notifications there. Then make a link code:
-
-   ```sh
-   pasture link
-   ```
-
-   It prints a command with a long `pasture-link:…` code.
-3. On the hub, run that command:
+1. Set up the hub as usual ([docs/setup.md](setup.md)): enroll the phone, turn
+   on push notifications.
+2. On the new machine, install pasture and run it as a service (steps 1, 2 and
+   5 of [setup](setup.md)); skip enrolling. If your tailnet has no HTTPS
+   certificates, pasture makes its own CA there on its own; nothing goes on the
+   phone for it.
+3. On the phone, tap the machine name at the top left → **Add a machine**. It
+   shows a command with a one-time code (good for 15 minutes):
 
    ```sh
-   pasture machines add pasture-link:eyJ2Ijox…
+   pasture join desktop K7QF-3MZX-9RTD-PQ2W-XY7Z
    ```
 
-   It checks the machine answers, then the machine shows up on the phone's
-   dashboard within a few seconds.
+   Run it on the new machine (**Copy** puts it on the clipboard; from an
+   iPhone, a Mac pastes it directly). The new machine checks it is talking to
+   your hub (the code carries the hub's certificate fingerprint when the hub
+   uses its own), gives the hub a link token, and the hub checks it can reach
+   the machine back. The phone switches to it when it is in.
+4. Hold the machine in that sheet and turn on its agents' alerts (Claude Code,
+   Grok Build): pasture adds its hooks to their settings there. Installing the
+   agents themselves is up to you; the phone gives you a terminal there.
 
-Claude Code hooks (`pasture hooks claude --install`) and herdr alerts on the
-other machine go to its own pasture, which hands them to the hub.
+Without the phone: `pasture link` on the machine prints a
+`pasture machines add <code>` command to run on the hub.
 
 ## Updates
 
@@ -52,7 +60,8 @@ pasture older than 0.5 need one update by hand first.
 | On | Command | |
 |---|---|---|
 | the hub | `pasture machines list` | The machines it reaches. |
-| the hub | `pasture machines remove box` | Stop showing a machine (its link stays valid there until revoked). |
+| the phone | tap the name → hold a machine → **Remove** | Stop showing it; it revokes the hub's link. |
+| the hub | `pasture machines remove box` | The same, from a terminal. |
 | the hub | `pasture machines add CODE --name build` | Show it under another name. |
 | the machine | `pasture link --list` | Hubs that may reach it. |
 | the machine | `pasture link --revoke hub` | Cut the hub off at once, open terminals included. |

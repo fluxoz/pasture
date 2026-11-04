@@ -14,6 +14,7 @@
     pasture doctor       check everything and say what to fix (--json for agents)
     pasture hooks        report Claude Code / Grok sessions to pasture
     pasture service      install pasture as a background service (or remove it)
+    pasture join         add this machine to your hub, with the code from the phone
     pasture link         let your hub (the machine your phone uses) reach this one
     pasture machines     on the hub: add, list or remove the machines it reaches
     pasture update       update to the latest release (or check, or set auto updates)
@@ -77,6 +78,23 @@ def tailnet() -> dict:
     if not name:
         raise SystemExit("pasture: this node has no MagicDNS name; turn MagicDNS on in the Tailscale admin console")
     return {"name": name, "https": bool(status.get("CertDomains")), "tailscale": tailscale, "ips": me.get("TailscaleIPs") or []}
+
+
+def full_name(host: str) -> str:
+    """A tailnet machine's MagicDNS name from its short name ("desktop" -> desktop.<tailnet>.ts.net)."""
+    name, _, port = host.partition(":")
+    tailscale = find_tailscale()
+    if "." in name or not tailscale:
+        return host
+    try:
+        status = json.loads(subprocess.run([tailscale, "status", "--json"], capture_output=True, text=True, timeout=10, check=True).stdout)
+    except (subprocess.SubprocessError, ValueError, OSError):
+        return host
+    for node in [status.get("Self") or {}, *(status.get("Peer") or {}).values()]:
+        dns = (node.get("DNSName") or "").rstrip(".")
+        if dns.split(".")[0].lower() == name.lower():
+            return dns + (f":{port}" if port else "")
+    return host
 
 
 def tailscale_serve(tailscale: str, args: list[str]) -> None:
@@ -308,20 +326,21 @@ def cmd_doctor(args) -> None:
 def cmd_hooks(args) -> None:
     from . import install
 
+    cmd = [args.command] if args.command else None
     if args.agent == "claude":
         if not args.install:
-            print(json.dumps({"hooks": install.claude_hooks()}, indent=2))
+            print(json.dumps({"hooks": install.claude_hooks(cmd)}, indent=2))
             print(f"(add to {install.claude_settings()}, or run `pasture hooks claude --install`)", file=sys.stderr)
             return
         path = Path(args.settings).expanduser() if args.settings else None
-        changed = install.install_claude_hooks(path, uploads=state_dir(None) / "uploads")
+        changed = install.install_claude_hooks(path, cmd, uploads=state_dir(None) / "uploads")
         where = path or install.claude_settings()
         print(f"Claude Code hooks {'added to' if changed else 'already in'} {where}. New Claude sessions report to pasture.")
     else:
         if not args.install:
-            print(json.dumps({"hooks": {"Stop": [{"hooks": [install.hook("grok", "stop")]}]}}, indent=2))
+            print(json.dumps({"hooks": {"Stop": [{"hooks": [install.hook("grok", "stop", cmd)]}]}}, indent=2))
             return
-        print(f"Grok hooks written to {install.install_grok_hooks()}.")
+        print(f"Grok hooks written to {install.install_grok_hooks(cmd=cmd)}.")
 
 
 def cmd_service(args) -> None:
@@ -348,6 +367,17 @@ def cmd_link(args) -> None:
     if args.revoke:
         print(f"Revoked {args.revoke}." if store.revoke(args.revoke) else f"No link named {args.revoke}.")
         return
+    host, url, ca, note = link_details(args, state)
+    code = links.encode_code(url, store.create(args.name), host.split(".")[0], ca)
+    print("On your hub (the machine your phone uses), run:\n")
+    print(f"    pasture machines add {code}\n")
+    print(f"That gives the hub your shells and agents here, like the phone has. Undo: `pasture link --revoke {args.name}`.{note}")
+
+
+def link_details(args, state: Path) -> tuple[str, str, str | None, str]:
+    """This machine as a hub reaches it: host, URL, what to trust, a note."""
+    from . import tls
+
     host = args.host or os.environ.get("PASTURE_HOST") or tailnet()["name"]
     url = f"https://{host}" + ("" if args.https_port == 443 else f":{args.https_port}")
     # What the hub must trust to reach us: our CA, else (a certificate of our
@@ -365,10 +395,73 @@ def cmd_link(args) -> None:
         note = "\nThe hub pins this machine's certificate: after renewing it, link again (or pass --ca with the CA that signs it)."
     else:
         ca = None
-    code = links.encode_code(url, store.create(args.name), host.split(".")[0], ca)
-    print("On your hub (the machine your phone uses), run:\n")
-    print(f"    pasture machines add {code}\n")
-    print(f"That gives the hub your shells and agents here, like the phone has. Undo: `pasture link --revoke {args.name}`.{note}")
+    return host, url, ca, note
+
+
+def hub_context(base: str, pin: str | None) -> ssl.SSLContext:
+    """TLS to the hub: publicly trusted, or (its own certificate) the one whose
+    fingerprint is in the join code."""
+    from . import machines, tls
+
+    if not pin:
+        return tls.public_context()
+    import socket
+    from urllib.parse import urlsplit
+
+    where = urlsplit(base)
+    probe = ssl.create_default_context()
+    probe.check_hostname = False
+    probe.verify_mode = ssl.CERT_NONE  # only to read the certificate, checked against the pin next
+    try:
+        with socket.create_connection((where.hostname, where.port or 443), timeout=10) as sock:
+            with probe.wrap_socket(sock, server_hostname=where.hostname) as conn:
+                der = conn.getpeercert(binary_form=True)
+    except OSError as e:
+        raise SystemExit(f"pasture: cannot reach {base} ({e}): is that your hub's name, and Tailscale on here?")
+    if machines.pin_of_der(der) != pin:
+        raise SystemExit(f"pasture: {base} is not the machine that made this code (its certificate differs). Check the name.")
+    ctx = ssl.create_default_context(cadata=ssl.DER_cert_to_PEM_cert(der))
+    ctx.verify_flags |= ssl.VERIFY_X509_PARTIAL_CHAIN
+    ctx.check_hostname = False  # the fingerprint identifies it
+    return ctx
+
+
+def cmd_join(args) -> None:
+    from urllib.parse import urlsplit
+
+    from . import links, machines
+
+    state = state_dir(args.state)
+    code = machines.normalize_code(args.code)
+    if len(code) not in (machines.TOKEN_LEN, machines.TOKEN_LEN + machines.PIN_LEN):
+        raise SystemExit("pasture: that code looks incomplete; copy it again from the phone")
+    pin = code[machines.TOKEN_LEN :] or None
+    base = args.hub.rstrip("/") if args.hub.startswith(("https://", "http://")) else "https://" + full_name(args.hub)
+    if gateway_info(state, args.port) is None:
+        raise SystemExit("pasture: pasture is not running here; start it first (`pasture service install`), then join")
+    host, url, ca, _ = link_details(args, state)
+    name = machines.check_name(args.name or host.split(".")[0])
+    hub = (urlsplit(base).hostname or "hub").split(".")[0]
+    store = links.Links(state / "links.json")
+    token = store.create(hub)
+    ctx = hub_context(base, pin) if base.startswith("https://") else None
+    body = json.dumps({"code": code, "name": name, "url": url, "token": token, "ca": ca}).encode()
+    req = urllib.request.Request(base + "/api/machines/join", data=body, headers={"Content-Type": "application/json"}, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=30, context=ctx) as r:
+            answer = json.load(r)
+    except urllib.error.HTTPError as e:
+        store.revoke(hub)
+        try:
+            why = json.load(e).get("error")
+        except ValueError:
+            why = None
+        raise SystemExit(f"pasture: the hub said no: {why or e.code}")
+    except (urllib.error.URLError, OSError) as e:
+        store.revoke(hub)
+        raise SystemExit(f"pasture: cannot reach {base} ({getattr(e, 'reason', e)})")
+    print(f"Added {answer['name']} to {hub}: it shows on your phone in a few seconds.")
+    print(f"Undo: remove it on the phone (tap the machine name, hold {answer['name']}), or `pasture link --revoke {hub}` here.")
 
 
 def publicly_trusted(url: str) -> bool:
@@ -400,7 +493,17 @@ def cmd_machines(args) -> None:
             print(f"{e['name']}  {e['url']}{'  (own CA)' if e.get('ca') else ''}")
         return
     if args.action == "remove":
-        print(f"Removed {args.target}." if registry.remove(args.target) else f"No machine named {args.target}.")
+        entry = next((e for e in registry.load() if e["name"] == args.target), None)
+        if entry is None:
+            raise SystemExit(f"pasture: no machine named {args.target}")
+        try:  # have it revoke our link too
+            req = urllib.request.Request(entry["url"] + "/api/unlink", data=b"{}", headers={"Authorization": f"Bearer {entry['token']}"}, method="POST")
+            urllib.request.urlopen(req, timeout=5, context=machines.ssl_context(entry.get("ca"))).close()
+            revoked = " (and its link to this hub)"
+        except (urllib.error.URLError, OSError):
+            revoked = f"; it was not reachable, so revoke the link there: `pasture link --revoke ...`"
+        registry.remove(args.target)
+        print(f"Removed {args.target}{revoked}.")
         return
     try:
         data = links.decode_code(args.target)
@@ -471,10 +574,14 @@ def cmd_serve(args) -> None:
     else:
         info = tailnet()
         host = info["name"]
-        if not info["https"] and not use_tls:
+        if not info["https"] and not use_tls and not args.tailscale_cert:
+            # No Tailscale certificates on this tailnet: our own CA, for this name only.
+            tls.init(state, host)
+            own_tls, use_tls = tls.paths(state), True
             print(
-                "pasture: HTTPS certificates look off for this tailnet. Turn them on in the Tailscale admin\n"
-                "console (DNS > HTTPS Certificates), or use your own CA: `pasture tls init`.",
+                "pasture: Tailscale's HTTPS certificates are off for this tailnet, so pasture made its own CA\n"
+                "for this machine. Linked to a hub, nothing more is needed; if your phone uses this machine\n"
+                "itself, install the CA on it: `pasture tls phone`.",
                 file=sys.stderr,
             )
     if info and not args.no_tailscale_serve:
@@ -560,10 +667,17 @@ def main(argv: list[str] | None = None) -> None:
     hooks.add_argument("agent", choices=["claude", "grok"])
     hooks.add_argument("--install", action="store_true", help="write the hooks (Claude: merged into settings.json, with a backup)")
     hooks.add_argument("--settings", help="Claude Code settings file (default: ~/.claude/settings.json)")
+    hooks.add_argument("--command", help="the pasture the hooks run (default: this one), e.g. a stable profile path")
     service = sub.add_parser("service", help="run pasture in the background (systemd, launchd, Windows Startup)")
     service.add_argument("action", choices=["install", "uninstall"])
     service.add_argument("--dry-run", action="store_true", help="print what would be written and run")
     service.add_argument("serve_args", nargs=argparse.REMAINDER, help="after --: options for `pasture serve`")
+    join = sub.add_parser("join", help="add this machine to your hub, with the code from the phone (Add a machine)")
+    join.add_argument("hub", help="the hub's name, e.g. desktop (as the phone shows it)")
+    join.add_argument("code", help="the code from the phone")
+    common(join)
+    join.add_argument("--name", help="show this machine under another name (default: its host name)")
+    join.add_argument("--ca", help="the CA certificate this machine's HTTPS uses, if not `pasture tls init`'s")
     link = sub.add_parser("link", help="let your hub (the machine your phone uses) reach this machine")
     common(link)
     link.add_argument("--name", default="hub", help="what to call the hub's access here (default: hub)")
@@ -596,15 +710,24 @@ def main(argv: list[str] | None = None) -> None:
             except (AttributeError, ValueError):
                 pass
     argv = list(sys.argv[1:] if argv is None else argv)
-    if not argv or argv[0] not in ("serve", "enroll", "tls", "notify", "doctor", "hooks", "service", "link", "machines", "update", "-h", "--help", "--version"):
+    if not argv or argv[0] not in ("serve", "enroll", "tls", "notify", "doctor", "hooks", "service", "link", "machines", "update", "join", "-h", "--help", "--version"):
         argv.insert(0, "serve")  # `pasture` alone, or with serve's flags
     args = parser.parse_args(argv)
     if args.cmd == "tls":
         (cmd_tls_init if args.tls_cmd == "init" else cmd_tls_phone)(args)
     elif args.cmd == "machines" and args.action != "list" and not args.target:
         parser.error(f"machines {args.action} needs {'a link code' if args.action == 'add' else 'a name'}")
-    elif args.cmd in ("notify", "doctor", "hooks", "service", "link", "machines", "update"):
-        {"notify": cmd_notify, "doctor": cmd_doctor, "hooks": cmd_hooks, "service": cmd_service, "link": cmd_link, "machines": cmd_machines, "update": cmd_update}[args.cmd](args)
+    elif args.cmd in ("notify", "doctor", "hooks", "service", "link", "machines", "update", "join"):
+        {
+            "notify": cmd_notify,
+            "doctor": cmd_doctor,
+            "hooks": cmd_hooks,
+            "service": cmd_service,
+            "link": cmd_link,
+            "machines": cmd_machines,
+            "update": cmd_update,
+            "join": cmd_join,
+        }[args.cmd](args)
     else:
         (cmd_enroll if args.cmd == "enroll" else cmd_serve)(args)
 

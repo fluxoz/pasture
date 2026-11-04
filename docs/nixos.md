@@ -111,6 +111,8 @@ For Linux or macOS with home-manager (NixOS or not):
   services.pasture = {
     enable = true;
     name = "devbox";        # the home-screen label
+    hooks.claude = true;    # Claude Code sessions alert the phone (merged on each switch; yours kept)
+    # hooks.grok = true;
     # dictation = true;     # whisper.cpp (CPU) and the base.en model
     # environment.PASTURE_DICTATE_MODEL = "/path/to/model.bin";
   };
@@ -120,5 +122,5 @@ For Linux or macOS with home-manager (NixOS or not):
 It runs `pasture serve` as a systemd user service (Linux; add
 `loginctl enable-linger $USER`) or a launchd agent (macOS, logs in
 `~/Library/Logs/pasture.log`). The `pasture` command is installed too:
-`pasture enroll`, `pasture tls init`, `pasture hooks claude --install`,
-`pasture doctor`.
+`pasture enroll`, `pasture join`, `pasture tls init`, `pasture doctor`. To add
+the machine to your hub, see [several machines](machines.md).
