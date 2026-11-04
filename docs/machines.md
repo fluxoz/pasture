@@ -40,6 +40,13 @@ agent on that machine.
 Claude Code hooks (`pasture hooks claude --install`) and herdr alerts on the
 other machine go to its own pasture, which hands them to the hub.
 
+## Updates
+
+⋮ → **Updates** on the phone lists every machine with its version. Release
+binaries update themselves (or on **Update now**), each once no terminal is
+open on it; set **Auto**, **Notify** or **Off** per machine. Machines on a
+pasture older than 0.5 need one update by hand first.
+
 ## Manage them
 
 | On | Command | |

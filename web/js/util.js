@@ -4,6 +4,8 @@
 export const G = {
   robot: '\u{f06a9}',
   server: '󰒋',
+  update: '󰚰',
+  download: '󰇚',
   term: '',
   tmux: '',
   bell: '',

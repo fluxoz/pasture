@@ -77,6 +77,16 @@ SSH: one owner, a private network, and never the public internet.
   or its pinned certificate (carried in the link code). Revoking it
   (`pasture link --revoke`) closes the hub's open terminals within seconds.
   A hub that is compromised reaches every machine linked to it.
+- Updates (release binaries): pasture trusts this repository's GitHub
+  releases. It fetches over HTTPS from github.com, checks the binary against
+  the release's `SHA256SUMS`, runs its `--version`, and only then swaps it in.
+  The checksum guards against a damaged download, not against someone who
+  controls the release: whoever can publish a release here can run code on
+  every machine with automatic updates. If that is not a trust you want, use
+  `pasture update --mode notify` (or `off`) and update by hand, or build from
+  source with Nix (Nix installs never self-update). Anyone with a session can
+  start an update or change the mode, but only to this repository's latest
+  release.
 - `pasture tls phone` serves only the public CA certificate, over plain HTTP,
   bound to the Tailscale IPv4 address, until you stop it.
 - Dictation audio is held in the gateway's memory for one recording and sent

@@ -55,9 +55,9 @@ jobs:
             # cannot clash with the libssl PyInstaller bundles for Python's ssl module.
             export OPENSSL_DIR="$(brew --prefix openssl@3)" OPENSSL_STATIC=1
           fi
-          pip install . pyinstaller
-          extra=()
-          if [ "$RUNNER_OS" = "Windows" ]; then extra=(--collect-all winpty); fi
+          pip install . pyinstaller certifi
+          extra=(--collect-data certifi)  # Mozilla's CAs: the bundled OpenSSL looks for the system's in the build machine's places
+          if [ "$RUNNER_OS" = "Windows" ]; then extra+=(--collect-all winpty); fi
           pyinstaller --onefile --name pasture --add-data "pasture/web:pasture/web" \
             --collect-submodules pasture "${extra[@]}" pasture_entry.py
       - name: Smoke test
@@ -73,6 +73,7 @@ jobs:
           python -c "import json; d = json.load(open('doctor.json')); assert d['checks'], d"
           ./dist/pasture service install --dry-run -- --name smoke
           ./dist/pasture hooks claude > hooks.json && python -c "import json; json.load(open('hooks.json'))"
+          ./dist/pasture update --check --state ./smoke   # HTTPS to github.com from inside the binary
       - name: Name it
         run: |
           mkdir -p ../out

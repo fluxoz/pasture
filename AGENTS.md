@@ -91,7 +91,11 @@ after every step and work through what is left.
    shell so the service keeps them.
 8. **Check.** `pasture doctor` until nothing fails; ask them to confirm the
    dashboard opens on the phone and a test notification arrives.
-9. **More machines (optional).** The phone keeps one app; one machine (the
+9. **Updates.** Release binaries update themselves (installing when no
+   terminal is open); tell the user, and offer `pasture update --mode notify`
+   if they would rather approve each one. Nix and pip installs update the way
+   they were installed.
+10. **More machines (optional).** The phone keeps one app; one machine (the
    hub, usually the first) reaches the others. On each other machine, steps
    1-4 and 7, no enrolling. Then `pasture link` there prints
    `pasture machines add <code>`: run that on the hub (ask first; the code is

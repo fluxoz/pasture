@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import ssl
@@ -11,6 +12,7 @@ from aiohttp import web
 
 from .app import Gateway
 from .config import ConfigError, load
+from .updates import RESTART_CODE
 
 
 def main() -> None:
@@ -36,16 +38,22 @@ def main() -> None:
         cfg.origin,
         "open" if gateway.auth.enrollment_open() else "closed",
     )
-    web.run_app(
-        gateway.app(),
-        host=cfg.bind,
-        port=cfg.port,
-        ssl_context=context,
-        print=None,
-        access_log=None,
-        handle_signals=True,
-        shutdown_timeout=3.0,  # SSE streams and terminals never finish on their own
-    )
+    try:
+        web.run_app(
+            gateway.app(),
+            host=cfg.bind,
+            port=cfg.port,
+            ssl_context=context,
+            print=None,
+            access_log=None,
+            handle_signals=True,
+            shutdown_timeout=3.0,  # SSE streams and terminals never finish on their own
+        )
+    except asyncio.CancelledError:  # Gateway.request_restart
+        pass
+    if gateway.restart_requested:
+        logging.getLogger("pasture").info("restarting for the update")
+        sys.exit(RESTART_CODE)
 
 
 if __name__ == "__main__":

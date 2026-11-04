@@ -184,10 +184,21 @@ Every line is ✓, or says what to do next.
 (each has a `label` and a `created` date), then restart pasture. Its sessions
 end, and it gets no more notifications.
 
-**Update**: replace the binary with the new release and restart the service
-(`systemctl --user restart pasture`, or `launchctl kickstart -k gui/$UID/dev.pasture`,
-or log out and in on Windows). With Nix: `nix run --refresh github:fluxoz/pasture`.
-Passkeys and settings are kept. The phone app offers "New version ready".
+**Updates**: a release binary updates itself. Every 6 hours it looks for a
+new release of github.com/fluxoz/pasture; it downloads the binary for this
+platform, checks it against the release's `SHA256SUMS`, and installs it as
+soon as no terminal is open on that machine (a restart ends open terminals;
+tmux and herdr sessions carry on). The service then starts the new version.
+On the phone, ⋮ → **Updates** shows every machine's version, with
+**Update now** and a choice per machine: **Auto** (the default), **Notify**
+(only show new releases) or **Off** (never contact GitHub). From a terminal:
+`pasture update` (now), `pasture update --check`, `pasture update --mode notify`.
+Passkeys and settings are kept; if the machine your phone uses restarts, unlock
+the app again. A Windows service installed before 0.5 needs
+`pasture service install` once so it can restart itself.
+With pip: `pip install -U` the release's wheel. With Nix: update the flake
+input (`nix flake update pasture`) and rebuild; Nix installs never check.
+The phone app itself offers "New version ready" after its machine updates.
 
 **Back up**: the state directory holds your passkeys and, with your own CA, the
 CA. Copy it if you want to restore without enrolling again.

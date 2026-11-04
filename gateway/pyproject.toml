@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pasture"
-version = "0.4.0"
+version = "0.5.0"
 description = "Your coding agents on your phone: a passkey-gated terminal and agent dashboard on your tailnet"
 readme = { text = "See https://github.com/fluxoz/pasture", content-type = "text/plain" }
 license = { text = "MIT" }

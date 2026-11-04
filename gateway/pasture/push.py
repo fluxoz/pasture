@@ -30,6 +30,7 @@ from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
+from . import tls
 from .config import Config
 
 log = logging.getLogger("pasture.push")
@@ -252,7 +253,7 @@ class Push:
 
     async def _send(self, sub: dict, payload: dict, urgency: str = "normal") -> bool:
         if self.http is None:
-            self.http = aiohttp.ClientSession()
+            self.http = aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=tls.public_context()))
         body = json.dumps(payload, separators=(",", ":")).encode()
         try:
             data = encrypt(body, unb64u(sub["p256dh"]), unb64u(sub["auth"]))

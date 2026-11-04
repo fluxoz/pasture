@@ -11,6 +11,7 @@ import { pickImages, readClipboard, uploadImages, asArgs } from './upload.js';
 import { pushSupport, currentSubscription, enablePush, disablePush, testPush, pushKinds, updatePushKinds, trackPresence } from './push.js';
 import { openSheet, closeSheet, item, items, tiles, tile, section, toggle, choice, stepper, note } from './sheet.js';
 import { $, el, G, toast, storage, store, vibrate } from './util.js';
+import { updatesSheet, refreshUpdates, pendingUpdates } from './updates.js';
 
 const app = $('#app');
 const login = new Login();
@@ -368,6 +369,12 @@ function termMenu() {
   });
 }
 
+/** This machine and the ones it is the hub for, for the updates sheet. */
+function allMachines() {
+  const here = { name: null, label: config?.appName || 'this machine', connected: true, state: dash.hubState };
+  return [here, ...dash.others().map((m) => ({ name: m.name, label: m.name, connected: m.connected, state: m.state }))];
+}
+
 async function dashMenu() {
   const support = config?.push ? pushSupport() : null;
   const sub = support?.ok ? await currentSubscription().catch(() => null) : null;
@@ -414,6 +421,11 @@ async function dashMenu() {
             }),
         ),
       items(
+        item({
+          icon: G.update,
+          label: pendingUpdates(allMachines()) ? `Updates · ${pendingUpdates(allMachines())} available` : 'Updates',
+          onSelect: () => updatesSheet(allMachines),
+        }),
         item({ icon: G.refresh, label: 'Reload app', onSelect: () => location.reload() }),
         item({
           icon: G.signout,
@@ -669,6 +681,7 @@ function wire() {
   events = new Events({
     onState: (state) => {
       dash.update(state);
+      refreshUpdates();
       updateBadges(state);
     },
     onAlert: (a) => {

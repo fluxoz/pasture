@@ -30,6 +30,7 @@ from .providers.tmux import TmuxProvider
 from .pty_bridge import CLOSE_EXPIRED, MAX_PTYS_PER_SESSION, Bridge, Pty, clamp_size
 from .links import Links
 from .machines import Machines
+from .updates import Updater
 from .push import Push, PushError
 from .uploads import MAX_BYTES as UPLOAD_MAX, Uploads
 from .sessions import Session, SessionStore
@@ -165,6 +166,11 @@ class Gateway:
         # Machines this one is the hub for: their state and alerts come here.
         self.machines = Machines(cfg.state_dir / "machines.json", self.hub, self.alerts.add)
         self.hub.register(self.machines.name, self.machines.state)
+        # New releases: checked, installed when no terminal is open, then a restart.
+        self.restart_requested = False
+        self._main: asyncio.Task | None = None
+        self.updates = Updater(cfg.state_dir, self.hub, busy=self.terminals_open, restart=self.request_restart)
+        self.hub.register(self.updates.name, self.updates.state)
         for provider in (self.shell, self.tmux, self.herdr, self.alerts):
             if provider is not None:
                 self.hub.register(provider.name, provider.state)
@@ -661,9 +667,38 @@ class Gateway:
         await self.dictation.stream(ws)
         return ws
 
+    # -- updates ------------------------------------------------------------
+
+    def terminals_open(self) -> bool:
+        """A restart ends open terminals (tmux and herdr sessions live on)."""
+        return any(s.ptys for s in self.sessions.all()) or any(s.ptys for s in self.links.sessions())
+
+    def request_restart(self) -> None:
+        """Exit with updates.RESTART_CODE once shut down; the service manager starts the new binary."""
+        self.restart_requested = True
+        if self._main is not None:
+            self._main.cancel()
+
+    async def api_update(self, request: web.Request) -> web.Response:
+        """The update state; POST {op: check|apply|mode, mode}. For the phone (a
+        session; a hub's link) and `pasture update` (the local notify token)."""
+        local = read_secret(self.cfg.notify_token_file)
+        given = (request.headers.get("X-Pasture-Notify") or "").encode()
+        if not (len(local) >= 16 and given and hmac.compare_digest(given, local)):
+            self.require(request)
+            if request.method == "POST":
+                self.check_csrf(request)
+        if request.method == "POST":
+            body = await self.body_json(request)
+            try:
+                self.updates.request(str(body.get("op") or ""), body.get("mode"))
+            except ValueError as e:
+                return json_error(400, str(e))
+        return web.json_response(self.updates.state())
+
     # -- other machines (this one is their hub) -------------------------------
 
-    PROXY_API = frozenset({"action", "preview", "projects", "upload"})
+    PROXY_API = frozenset({"action", "preview", "projects", "upload", "update"})
 
     async def proxy_api(self, request: web.Request) -> web.Response:
         """/m/<name>/api/<action|preview|projects|upload>, forwarded with that machine's link token."""
@@ -782,6 +817,7 @@ class Gateway:
     # -- lifecycle -------------------------------------------------------
 
     async def on_startup(self, app: web.Application) -> None:
+        self._main = asyncio.current_task()  # run_app's: cancelling it shuts down cleanly
         for provider in (self.tmux, self.herdr, self.alerts):
             if provider is not None:
                 try:
@@ -790,6 +826,7 @@ class Gateway:
                     log.exception("provider %s failed to start", provider.name)
         self.uploads.start()
         await self.machines.start()
+        await self.updates.start()
         if self.dictation is not None:
             # Load and warm the model now, not on the first word someone says.
             self._warming = asyncio.create_task(self.dictation.warm())
@@ -797,6 +834,7 @@ class Gateway:
     async def on_cleanup(self, app: web.Application) -> None:
         self.uploads.stop()
         await self.machines.stop()
+        await self.updates.stop()
         for provider in (self.tmux, self.herdr, self.alerts):
             if provider is not None:
                 await provider.stop()
@@ -827,6 +865,8 @@ class Gateway:
         r.add_post("/api/push/test", self.api_push_test)
         r.add_post("/api/presence", self.api_presence)
         r.add_post("/api/notify", self.api_notify)
+        r.add_get("/api/update", self.api_update)
+        r.add_post("/api/update", self.api_update)
         r.add_get("/ws/term", self.ws_term)
         r.add_get("/ws/dictate", self.ws_dictate)
         r.add_get("/m/{name}/api/{tail}", self.proxy_api)

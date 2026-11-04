@@ -6,6 +6,8 @@ from pathlib import Path
 
 from pasture.config import Config
 
+os.environ.setdefault("PASTURE_UPDATES", "off")  # test gateways never ask GitHub
+
 HOST = "pasture.test"
 ORIGIN = "https://pasture.test"
 

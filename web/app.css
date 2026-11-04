@@ -238,6 +238,11 @@ select {
 .chip.machine .nf { font-size: 16px; color: var(--faint); }
 .chip.machine.live .nf { color: var(--green); }
 
+/* Updates sheet: a version row with its status on the right. */
+.setting.info { padding-top: 10px; padding-bottom: 10px; }
+.setting.info .label { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.setting.info .meta { color: var(--subtext); font-size: 13.5px; }
+
 .section-head {
   display: flex;
   align-items: baseline;

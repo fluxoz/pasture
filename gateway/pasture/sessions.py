@@ -92,5 +92,8 @@ class SessionStore:
             if now - s.created > self.absolute or now - s.last_seen > self.idle:
                 del self._table[sid]
 
+    def all(self) -> list[Session]:
+        return list(self._table.values())
+
     def __len__(self) -> int:
         return len(self._table)

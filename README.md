@@ -23,7 +23,8 @@ installed on your phone's home screen.
   third-party notification app.
 - **All your machines**: run it on each, link them to one (`pasture link`),
   and the phone keeps one app: a chip per machine on the dashboard, every
-  machine's alerts in one place.
+  machine's alerts in one place, and every machine's updates (they install
+  themselves from the releases, or tap Update).
 - **Yours**: it runs as your user on your machine (Linux, macOS or Windows).
   Passkey login (Face ID), one-time QR enrollment, reachable only on your
   tailnet. No accounts, no telemetry, no CDN.
@@ -120,8 +121,10 @@ owner on a private network. Read [SECURITY.md](SECURITY.md).
   name-constrained to that one name, so trusting it on the phone risks
   nothing else. Push notifications go through the
   phone's push service (Apple's for an iPhone), encrypted end to end, so it
-  sees only size and timing. Nothing else: dictation audio stays on the
-  machine, and fonts and xterm.js are bundled.
+  sees only size and timing. Release binaries check github.com for new
+  releases every 6 hours (turn it off: ⋮ → Updates, or
+  `pasture update --mode off`); Nix installs never do. Nothing else:
+  dictation audio stays on the machine, and fonts and xterm.js are bundled.
 
 ## Requirements
 
@@ -180,6 +183,7 @@ All under `services.pasture`; only `enable`, `user` and `hostName` are required.
 | `pasture doctor [--json]` | Check everything; print fixes. |
 | `pasture link [--name N] [--ca FILE]` / `--list` / `--revoke N` | Let a hub reach this machine ([several machines](docs/machines.md)). |
 | `pasture machines add CODE [--name N]` / `list` / `remove N` | On the hub: the machines the phone reaches through it. |
+| `pasture update [--check]` / `--mode auto\|notify\|off` | Update a release binary now, check, or choose automatic updates ([details](docs/setup.md#day-to-day)). |
 
 `PASTURE_*` environment variables ([config.py](gateway/pasture/config.py)) set
 the rest, e.g. `PASTURE_DICTATE_SERVER` and `PASTURE_DICTATE_MODEL`.

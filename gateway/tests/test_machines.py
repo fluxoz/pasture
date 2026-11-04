@@ -3,6 +3,7 @@ import json
 import sys
 import unittest
 
+import aiohttp
 from aiohttp import CookieJar
 from aiohttp.test_utils import TestClient, TestServer
 
@@ -49,7 +50,10 @@ class HubTest(TempDir, unittest.IsolatedAsyncioTestCase):
         (static / "index.html").write_text("<!doctype html><title>t</title>")
         # The other machine ("box").
         (self.tmp / "node").mkdir()
-        self.node_cfg = make_config(self.tmp / "node", static_dir=static, push=False, shell_command=[sys.executable, "-c", ECHO])
+        (self.tmp / "node" / "notify-token").write_text("n" * 43)
+        self.node_cfg = make_config(
+            self.tmp / "node", static_dir=static, push=False, shell_command=[sys.executable, "-c", ECHO], notify_token_file=self.tmp / "node" / "notify-token"
+        )
         self.node = Gateway(self.node_cfg)
         self.node_server = TestServer(self.node.app(), shutdown_timeout=0.5)  # its event stream to the hub never ends by itself
         await self.node_server.start_server()
@@ -90,7 +94,7 @@ class HubTest(TempDir, unittest.IsolatedAsyncioTestCase):
 
     async def test_the_node_takes_the_link_token(self):
         bearer = {"Authorization": f"Bearer {self.token}"}
-        async with TestClient(self.node_server) as c:
+        async with aiohttp.ClientSession(str(self.node_server.make_url(""))) as c:  # not TestClient: closing it stops the server
             r = await c.get("/api/state", headers=bearer)
             self.assertEqual(r.status, 200)
             r = await c.post("/api/upload", data=JPEG, headers=bearer)  # no CSRF header needed with a bearer token
@@ -157,3 +161,27 @@ class HubTest(TempDir, unittest.IsolatedAsyncioTestCase):
         r = await self.client.get("/api/state")
         gone = next(m for m in (await r.json())["state"]["machines"] if m["name"] == "gone")
         self.assertFalse(gone["connected"])
+
+    async def test_updates_from_the_phone_and_the_cli(self):
+        await self.connected()
+        r = await self.client.get("/api/update")
+        self.assertEqual(r.status, 401)
+        await self.login()
+        r = await self.client.get("/api/update")
+        self.assertIn(r.status, (200,))
+        self.assertIn((await r.json())["kind"], ("pip", "nix"))
+        nix = self.node.updates.how == "nix"  # the tests also run inside the Nix build
+        r = await self.client.post("/m/box/api/update", json={"op": "mode", "mode": "notify"}, headers=POST)  # the phone, through the hub
+        self.assertEqual(r.status, 400 if nix else 200)
+        self.assertEqual(self.node.updates.state()["mode"], "off" if nix else "notify")
+        r = await self.client.post("/api/update", json={"op": "later"}, headers=POST)
+        self.assertEqual(r.status, 400)
+        token = self.node_cfg.notify_token_file.read_text().strip()  # `pasture update` on that machine
+        async with aiohttp.ClientSession(str(self.node_server.make_url(""))) as c:  # not TestClient: closing it stops the server
+            r = await c.get("/api/update", headers={"X-Pasture-Notify": token})
+            self.assertEqual(r.status, 200)
+            r = await c.get("/api/update", headers={"X-Pasture-Notify": "x" * 43})
+            self.assertEqual(r.status, 401)
+        async with asyncio.timeout(10):  # the hub sees the machine's update state
+            while (await self.connected())["state"].get("update", {}).get("mode") != self.node.updates.state()["mode"]:
+                await asyncio.sleep(0.05)

@@ -16,6 +16,7 @@
     pasture service      install pasture as a background service (or remove it)
     pasture link         let your hub (the machine your phone uses) reach this one
     pasture machines     on the hub: add, list or remove the machines it reaches
+    pasture update       update to the latest release (or check, or set auto updates)
 
 HTTPS comes from the node's ts.net certificate (`tailscale serve`), or, after
 `pasture tls init`, from your own CA: the gateway then terminates TLS itself
@@ -372,12 +373,13 @@ def cmd_link(args) -> None:
 
 def publicly_trusted(url: str) -> bool:
     """Does our HTTPS verify without extra trust? (False if we cannot tell.)"""
-    import ssl
     import urllib.error
     import urllib.request
 
+    from . import tls
+
     try:
-        urllib.request.urlopen(url + "/healthz", timeout=5, context=ssl.create_default_context()).close()
+        urllib.request.urlopen(url + "/healthz", timeout=5, context=tls.public_context()).close()
         return True
     except urllib.error.HTTPError:
         return True  # the TLS handshake went through
@@ -408,6 +410,53 @@ def cmd_machines(args) -> None:
         raise SystemExit(f"pasture: {e}")
     registry.add(name, data["url"], data["token"], data.get("ca"))
     print(f"Added {name} ({app_name} at {data['url']}). It shows on the phone's dashboard in a few seconds.")
+
+
+def cmd_update(args) -> None:
+    from . import __version__, updates
+
+    state = state_dir(args.state)
+    how = updates.kind()
+    settings = updates.Settings(state / "update.json", updates.default_mode(how))
+    if args.mode:
+        if how == "nix":
+            raise SystemExit("pasture: this pasture comes from Nix; it updates with your flake input")
+        settings.set_mode(args.mode)
+        print({"auto": "Updates install on their own (when no terminal is open).", "notify": "pasture checks for updates and shows them; you install them.", "off": "pasture never checks for updates."}[args.mode])
+        return
+    if how == "nix":
+        print(f"pasture {__version__}, from Nix: update your flake input (`nix flake update pasture`) and rebuild.")
+        return
+    try:
+        latest = updates.latest_version()
+    except (updates.UpdateError, OSError) as e:
+        raise SystemExit(f"pasture: could not check for updates: {e}")
+    newer = updates.is_newer(latest, __version__)
+    print(f"pasture {__version__}; latest release {latest}; updates: {settings.mode()}.")
+    if args.check or not newer:
+        if newer and how != "binary":
+            print(f"Update with: pip install -U {updates.BASE}/releases/download/v{latest}/pasture-{latest}-py3-none-any.whl")
+        elif not newer:
+            print("Up to date.")
+        return
+    if how != "binary":
+        raise SystemExit(f"pasture: installed with pip; update with: pip install -U {updates.BASE}/releases/download/v{latest}/pasture-{latest}-py3-none-any.whl")
+    # The running service updates itself and restarts; without one, do it here.
+    try:
+        token = (state / "notify-token").read_text().strip()
+        local_request(state, args.port, "/api/update", {"op": "apply"}, {"X-Pasture-Notify": token})
+        print(f"The running pasture is updating to {latest}; it restarts on its own (the phone reconnects).")
+        return
+    except urllib.error.HTTPError as e:
+        raise SystemExit(f"pasture: the running gateway refused ({e.code})")
+    except OSError:
+        pass  # not running
+    target = Path(sys.executable)
+    try:
+        updates.install(updates.download(latest, target.parent), target)
+    except (updates.UpdateError, OSError) as e:
+        raise SystemExit(f"pasture: update failed: {e}")
+    print(f"Updated {target} to pasture {latest}.")
 
 
 def cmd_serve(args) -> None:
@@ -526,6 +575,11 @@ def main(argv: list[str] | None = None) -> None:
     machines_cmd.add_argument("target", nargs="?", help="add: the link code from `pasture link`; remove: the machine's name")
     machines_cmd.add_argument("--name", help="add: show it under this name (default: its host name)")
     machines_cmd.add_argument("--state", help="state directory")
+    update = sub.add_parser("update", help="update to the latest release (release binaries)")
+    update.add_argument("--check", action="store_true", help="only say whether there is a newer release")
+    update.add_argument("--mode", choices=["auto", "notify", "off"], help="auto: install updates on their own; notify: only show them; off: never check")
+    update.add_argument("--port", type=int, default=int(os.environ.get("PASTURE_PORT", "8795")), help="loopback port of the gateway")
+    update.add_argument("--state", help="state directory")
     tls_cmd = sub.add_parser("tls", help="your own CA instead of the ts.net certificate")
     tls_sub = tls_cmd.add_subparsers(dest="tls_cmd", required=True)
     init = tls_sub.add_parser("init", help="make the CA and a certificate for this node")
@@ -542,15 +596,15 @@ def main(argv: list[str] | None = None) -> None:
             except (AttributeError, ValueError):
                 pass
     argv = list(sys.argv[1:] if argv is None else argv)
-    if not argv or argv[0] not in ("serve", "enroll", "tls", "notify", "doctor", "hooks", "service", "link", "machines", "-h", "--help", "--version"):
+    if not argv or argv[0] not in ("serve", "enroll", "tls", "notify", "doctor", "hooks", "service", "link", "machines", "update", "-h", "--help", "--version"):
         argv.insert(0, "serve")  # `pasture` alone, or with serve's flags
     args = parser.parse_args(argv)
     if args.cmd == "tls":
         (cmd_tls_init if args.tls_cmd == "init" else cmd_tls_phone)(args)
     elif args.cmd == "machines" and args.action != "list" and not args.target:
         parser.error(f"machines {args.action} needs {'a link code' if args.action == 'add' else 'a name'}")
-    elif args.cmd in ("notify", "doctor", "hooks", "service", "link", "machines"):
-        {"notify": cmd_notify, "doctor": cmd_doctor, "hooks": cmd_hooks, "service": cmd_service, "link": cmd_link, "machines": cmd_machines}[args.cmd](args)
+    elif args.cmd in ("notify", "doctor", "hooks", "service", "link", "machines", "update"):
+        {"notify": cmd_notify, "doctor": cmd_doctor, "hooks": cmd_hooks, "service": cmd_service, "link": cmd_link, "machines": cmd_machines, "update": cmd_update}[args.cmd](args)
     else:
         (cmd_enroll if args.cmd == "enroll" else cmd_serve)(args)
 

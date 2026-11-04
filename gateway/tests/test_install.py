@@ -62,6 +62,13 @@ class ServiceTest(TempDir, unittest.TestCase):
         cmd = install.windows_startup(argv, env)
         self.assertIn('set "PASTURE_DICTATE_MODEL=/m.bin"', cmd)
         self.assertIn('start "pasture" /min', cmd)
+        lines = cmd.split("\r\n")  # started again after exiting for an update
+        self.assertEqual(lines[lines.index(":loop") + 1 :][:2], ["/opt/pasture/bin/pasture serve --name box", "if %errorlevel%==75 goto loop"])
+
+    def test_services_are_marked_supervised(self):
+        with mock.patch.dict(os.environ, {"PASTURE_PORT": "9000"}, clear=False):
+            env = install.service_env()
+        self.assertEqual((env["PASTURE_SUPERVISED"], env["PASTURE_PORT"]), ("1", "9000"))
 
     def test_dry_run_writes_nothing(self):
         env = {"HOME": str(self.tmp), "USERPROFILE": str(self.tmp), "XDG_CONFIG_HOME": str(self.tmp / "cfg"), "APPDATA": str(self.tmp / "ad")}

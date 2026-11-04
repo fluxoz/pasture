@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import datetime as dt
 import os
+import ssl
+import sys
 from pathlib import Path
 
 from cryptography import x509
@@ -21,6 +23,21 @@ from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
 CA_DAYS = 3650
 LEAF_DAYS = 800  # Apple platforms reject TLS server certificates valid for more than 825 days
+
+
+def public_context() -> ssl.SSLContext:
+    """TLS for public servers (GitHub, push services, ts.net names). The
+    release binaries also carry Mozilla's CA list (certifi): the OpenSSL inside
+    them looks for the system's CAs where the build machine kept them."""
+    ctx = ssl.create_default_context()
+    if getattr(sys, "frozen", False):
+        try:
+            import certifi
+
+            ctx.load_verify_locations(cafile=certifi.where())
+        except (ImportError, OSError):
+            pass
+    return ctx
 
 
 def paths(state: Path) -> dict[str, Path]:

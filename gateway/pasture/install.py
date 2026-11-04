@@ -125,6 +125,7 @@ def install_grok_hooks(home: Path | None = None, cmd: list[str] | None = None) -
 
 def service_env() -> dict[str, str]:
     env = {k: v for k, v in os.environ.items() if k.startswith("PASTURE_")}
+    env["PASTURE_SUPERVISED"] = "1"  # it is started again after exiting for an update
     if "PATH" in os.environ and sys.platform != "win32":
         env["PATH"] = os.environ["PATH"]
     return env
@@ -165,8 +166,23 @@ def launchd_plist(argv: list[str], env: dict[str, str], log: Path) -> bytes:
 
 
 def windows_startup(argv: list[str], env: dict[str, str]) -> str:
+    """Runs itself again in a minimized window, then keeps pasture running
+    across updates (it exits with 75 to be started again)."""
     sets = [f'set "{k}={v}"' for k, v in sorted(env.items())]
-    return "\r\n".join(["@echo off", *sets, f'start "pasture" /min {command_line(argv)}', ""])
+    return "\r\n".join(
+        [
+            "@echo off",
+            'if not "%~1"=="run" (',
+            '  start "pasture" /min "%~f0" run',
+            "  exit /b",
+            ")",
+            *sets,
+            ":loop",
+            command_line(argv),
+            "if %errorlevel%==75 goto loop",
+            "",
+        ]
+    )
 
 
 def service_paths() -> dict[str, Path]:

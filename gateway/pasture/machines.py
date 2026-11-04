@@ -22,6 +22,8 @@ from pathlib import Path
 
 import aiohttp
 
+from . import tls
+
 log = logging.getLogger("pasture.machines")
 
 NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
@@ -37,7 +39,7 @@ def check_name(name: str) -> str:
 
 def ssl_context(ca_pem: str | None) -> ssl.SSLContext:
     if not ca_pem:
-        return ssl.create_default_context()
+        return tls.public_context()
     # The machine's CA (or its own certificate), pinned: only it is trusted.
     ctx = ssl.create_default_context(cadata=ca_pem)
     ctx.verify_flags |= ssl.VERIFY_X509_PARTIAL_CHAIN  # a pinned certificate need not be self-signed

@@ -114,6 +114,9 @@ class Links:
     def active(self, name: str) -> bool:
         return any(d["name"] == name for d in self.load())
 
+    def sessions(self) -> list[LinkSession]:
+        return list(self._sessions.values())
+
     def session(self, token: str) -> LinkSession | None:
         digest = _hash(token)
         for d in self.load():
