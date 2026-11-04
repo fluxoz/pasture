@@ -59,6 +59,17 @@ let
     ${optionalString (cfg.secrets.enrollTokenFile != null) "export PASTURE_ENROLL_TOKEN_FILE=${lib.escapeShellArg cfg.secrets.enrollTokenFile}"}
     exec ${lib.getExe cli} enroll "$@"
   '';
+  # `pasture-notify`: alerts from agent hooks on this machine (inbox and push).
+  notifyCommand = pkgs.writeShellScriptBin "pasture-notify" ''
+    export PASTURE_PORT=${toString cfg.backendPort}
+    exec ${lib.getExe cli} notify "$@"
+  '';
+  claudeHook = event: {
+    type = "command";
+    command = "${lib.getExe notifyCommand} --hook claude ${event}";
+    async = true;
+    timeout = 10;
+  };
 
   environment = lib.filterAttrs (_: v: v != null) (
     {
@@ -390,6 +401,23 @@ in
       };
     };
 
+    notify.package = mkOption {
+      type = types.package;
+      readOnly = true;
+      default = notifyCommand;
+      defaultText = literalExpression "pasture-notify";
+      description = "The `pasture-notify` command, for hooks of other agents (`--hook <agent> stop|notification`).";
+    };
+    notify.claudeCode = mkOption {
+      type = types.bool;
+      default = false;
+      description = ''
+        Claude Code hooks (a system managed-settings drop-in) that send "needs
+        you" and "finished" to pasture: the inbox and push notifications, for
+        sessions outside herdr too. `pasture-notify` is installed either way.
+      '';
+    };
+
     push = {
       enable = mkOption {
         type = types.bool;
@@ -607,7 +635,16 @@ in
 
     users.users.${cfg.user} = {
       linger = mkIf cfg.linger true;
-      packages = mkIf cfg.enrollment.enable [ enrollCommand ];
+      packages = [ notifyCommand ] ++ optional cfg.enrollment.enable enrollCommand;
+    };
+
+    environment.etc."claude-code/managed-settings.d/50-pasture.json" = mkIf cfg.notify.claudeCode {
+      text = builtins.toJSON {
+        hooks = {
+          Notification = [ { hooks = [ (claudeHook "notification") ]; } ];
+          Stop = [ { hooks = [ (claudeHook "stop") ]; } ];
+        };
+      };
     };
 
     systemd.user.services.pasture = {

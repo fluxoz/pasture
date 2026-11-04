@@ -674,7 +674,8 @@ export class Dashboard {
           return row;
         })
       : [el('div', { class: 'empty', text: 'No alerts in the last hour' })];
-    openSheet({ title: 'Inbox', sub: this.state.alerts?.connected ? 'live from ntfy' : 'ntfy not connected', body: [el('div', { class: 'items' }, ...list)] });
+    const al = this.state.alerts;
+    openSheet({ title: 'Inbox', sub: !al?.ntfy ? 'from your agents' : al.connected ? 'from your agents and ntfy' : 'ntfy not connected', body: [el('div', { class: 'items' }, ...list)] });
   }
 
   matchAlert(a) {

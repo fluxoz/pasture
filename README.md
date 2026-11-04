@@ -16,8 +16,11 @@ installed on your phone's home screen.
   Enter, paste).
 - **Just say it**: tap the mic and talk. whisper.cpp transcribes on your own
   machine while you speak; pause, and it types the text and presses Enter.
-- **Know when they finish**: push notifications when an agent needs you or is
-  done, even with the app closed. Tap one to open that agent.
+- **Know when they finish**: push notifications to your lock screen when an
+  agent needs you or is done, even with the app closed; tap one to open that
+  agent. herdr agents report on their own; any other agent (Claude Code
+  hooks, scripts) with `pasture notify`. No Apple Developer account and no
+  third-party notification app.
 - **Yours**: it runs as your user on your machine (Linux, macOS or Windows).
   Passkey login (Face ID), one-time QR enrollment, reachable only on your
   tailnet. No accounts, no telemetry, no CDN.
@@ -119,6 +122,9 @@ AudioWorklet) but is untested.
   push notifications. Without herdr you get tmux sessions and shells.
 - **tmux**: list, attach, create in a project directory, rename, kill.
 - **Plain shells**: your login shell.
+- **Any agent's hooks**: `pasture notify --hook claude stop` (and
+  `notification`) from Claude Code hooks; `services.pasture.notify.claudeCode`
+  sets them up on NixOS ([setup guide](docs/setup.md#5-notifications)).
 - **ntfy** (optional): an inbox fed by a topic on the same machine, also
   forwarded as push notifications.
 
@@ -174,6 +180,7 @@ All under `services.pasture`; only `enable`, `user` and `hostName` are required.
 | `secrets.sessionKeyFile` / `enrollTokenFile` / `credentialsFile` | `null` | Optional; without them the gateway keeps its own in its state dir. |
 | `enrollment.enable` | `credentialsFile == null` | With a credentials secret, turn it off to allow only those passkeys. |
 | `push.enable` / `push.subject` | `true` / `null` | Web Push; nothing is sent until a device turns it on. |
+| `notify.claudeCode` | `false` | Claude Code hooks (managed settings) that report to pasture; `pasture-notify` is installed either way. |
 | `session.idleMinutes` / `absoluteMinutes` | `30` / `480` | |
 | `appName` / `shortName` | `"pasture"` | Home-screen label. |
 | `shell.enable` / `shell.command` | `true` / `null` | `null` = login shell. |
@@ -193,7 +200,9 @@ All under `services.pasture`; only `enable`, `user` and `hostName` are required.
 `--port`, `--https-port`, `--name`, `--state`, `--no-tailscale-serve` and
 `--tailscale-cert` (ignore your own CA). `pasture enroll [--new]` prints the
 QR code. `pasture tls init [--renew]` makes your own CA and certificate;
-`pasture tls phone` serves the CA for the phone. tmux, herdr and `whisper-server`
+`pasture tls phone` serves the CA for the phone. `pasture notify [--kind
+done|blocked|info] [--agent A] [--project P] TEXT` sends an alert; `--hook
+AGENT EVENT` takes a hook's JSON on stdin. tmux, herdr and `whisper-server`
 are used when they are on `PATH`; `PASTURE_*` environment variables (see
 [gateway/pasture/config.py](gateway/pasture/config.py)) set the rest.
 

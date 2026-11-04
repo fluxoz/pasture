@@ -37,7 +37,8 @@ class CliTest(TempDir, unittest.TestCase):
         self.assertEqual((args.cmd, args.host, args.no_tailscale_serve), ("serve", "h.example", True))
 
     def test_gateway_keeps_its_own_secrets(self):
-        env = {"PASTURE_HOST": "h.example", "PASTURE_STATE_DIR": str(self.tmp / "state")}
+        keep = {k: os.environ[k] for k in ("HOME", "USERPROFILE", "SYSTEMROOT") if k in os.environ}  # Path.home()
+        env = {**keep, "PASTURE_HOST": "h.example", "PASTURE_STATE_DIR": str(self.tmp / "state")}
         with mock.patch.dict(os.environ, env, clear=True):
             cfg = load()
             key = cfg.session_key_file.read_bytes()

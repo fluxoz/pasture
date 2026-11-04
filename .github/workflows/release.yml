@@ -49,6 +49,11 @@ jobs:
           path: gateway/pasture/web
       - name: Build
         run: |
+          if [ "${{ matrix.target }}" = macos-x86_64 ]; then
+            # No Intel wheel for cryptography: build it against a static OpenSSL, so it
+            # cannot clash with the libssl PyInstaller bundles for Python's ssl module.
+            export OPENSSL_DIR="$(brew --prefix openssl@3)" OPENSSL_STATIC=1
+          fi
           pip install . pyinstaller
           extra=()
           if [ "$RUNNER_OS" = "Windows" ]; then extra=(--collect-all winpty); fi

@@ -9,6 +9,8 @@
                          the name stays out of Certificate Transparency logs
     pasture tls phone    serve the CA certificate on the tailnet with a QR code,
                          for installing it on the phone
+    pasture notify       send an alert to your phone (inbox and push); with
+                         --hook, from a Claude Code or Grok hook
 
 HTTPS comes from the node's ts.net certificate (`tailscale serve`), or, after
 `pasture tls init`, from your own CA: the gateway then terminates TLS itself
@@ -24,6 +26,7 @@ import hashlib
 import json
 import os
 import shutil
+import ssl
 import subprocess
 import sys
 import urllib.error
@@ -119,11 +122,17 @@ def enrolled(state: Path) -> int:
 
 
 def show_qr(url: str, what: str) -> None:
+    """A QR code in the terminal (half blocks; plain ANSI blocks where the console
+    cannot encode them), then the link. Never fails: the link is enough."""
     try:
         import segno
 
-        segno.make(url, error="m").terminal(compact=True, border=2)
-    except ImportError:
+        qr = segno.make(url, error="m")
+        try:
+            qr.terminal(compact=True, border=2)
+        except UnicodeEncodeError:
+            qr.terminal(border=2)
+    except Exception:
         pass
     print(f"{what}\n{url}")
 
@@ -225,6 +234,61 @@ def cmd_tls_phone(args) -> None:
         server.server_close()
 
 
+def notify_body(args, stdin: str = "") -> dict:
+    body = {"kind": args.kind, "agent": args.agent, "project": args.project, "title": args.title, "message": " ".join(args.message)}
+    if args.hook:
+        agent, event = args.hook
+        try:
+            data = json.loads(stdin) if stdin.strip() else {}
+        except ValueError:
+            data = {}
+        cwd = str(data.get("cwd") or os.getcwd())
+        body.update(agent=agent, project=os.path.basename(cwd.rstrip("/\\")) or None)
+        if event == "notification":
+            body.update(kind="blocked", message=str(data.get("message") or "needs your input")[:300])
+        else:
+            body.update(kind="done", message=" ".join(str(data.get("last_assistant_message") or "finished").split())[:200])
+    return {k: v for k, v in body.items() if v}
+
+
+def post_notify(state: Path, port: int, body: dict) -> None:
+    """POST to the gateway on loopback: HTTPS with our own CA if there is one, else HTTP."""
+    from . import tls
+
+    token = (state / "notify-token").read_text().strip()
+    data = json.dumps(body).encode()
+    headers = {"Content-Type": "application/json", "X-Pasture-Notify": token}
+    own = tls.paths(state)
+    attempts = []
+    if own["cert"].exists():
+        ctx = ssl.create_default_context(cafile=str(own["ca"]))
+        ctx.check_hostname = False  # loopback; the CA check still applies
+        attempts.append((f"https://127.0.0.1:{port}", ctx))
+    attempts.append((f"http://127.0.0.1:{port}", None))
+    error: Exception | None = None
+    for base, ctx in attempts:
+        try:
+            req = urllib.request.Request(base + "/api/notify", data=data, headers=headers, method="POST")
+            with urllib.request.urlopen(req, timeout=3, context=ctx) as r:
+                r.read()
+            return
+        except urllib.error.HTTPError:
+            raise
+        except (urllib.error.URLError, OSError) as e:
+            error = e
+    raise error or OSError("gateway not reachable")
+
+
+def cmd_notify(args) -> None:
+    stdin = sys.stdin.read() if args.hook and not sys.stdin.isatty() else ""
+    try:
+        post_notify(state_dir(args.state), args.port, notify_body(args, stdin))
+    except (OSError, ValueError) as e:
+        if args.hook:
+            return  # a hook must never fail or slow the agent
+        raise SystemExit(f"pasture: could not reach the gateway on port {args.port}: {e}")
+
+
 def cmd_serve(args) -> None:
     from . import tls
 
@@ -307,6 +371,15 @@ def main(argv: list[str] | None = None) -> None:
     enroll = sub.add_parser("enroll", help="show a QR code to enroll a device")
     common(enroll)
     enroll.add_argument("--new", action="store_true", help="make a new one-time code even if the last is unused")
+    notify = sub.add_parser("notify", help="send an alert to your phone (inbox and push)")
+    notify.add_argument("message", nargs="*", help="the alert text")
+    notify.add_argument("--kind", choices=["done", "blocked", "info"], default="info")
+    notify.add_argument("--agent", help="who it is from, e.g. claude")
+    notify.add_argument("--project", help="what it is about, e.g. the repository")
+    notify.add_argument("--title", help="the notification title (default: from agent and kind)")
+    notify.add_argument("--hook", nargs=2, metavar=("AGENT", "EVENT"), help="read a Claude Code / Grok hook's JSON on stdin; EVENT is stop or notification")
+    notify.add_argument("--port", type=int, default=int(os.environ.get("PASTURE_PORT", "8795")), help="loopback port of the gateway")
+    notify.add_argument("--state", help="state directory")
     tls_cmd = sub.add_parser("tls", help="your own CA instead of the ts.net certificate")
     tls_sub = tls_cmd.add_subparsers(dest="tls_cmd", required=True)
     init = tls_sub.add_parser("init", help="make the CA and a certificate for this node")
@@ -316,12 +389,20 @@ def main(argv: list[str] | None = None) -> None:
     common(phone)
     phone.set_defaults(port=8411)
 
+    if sys.platform == "win32":  # QR codes and the odd arrow; Windows consoles default to a legacy codepage
+        for stream in (sys.stdout, sys.stderr):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except (AttributeError, ValueError):
+                pass
     argv = list(sys.argv[1:] if argv is None else argv)
-    if not argv or argv[0] not in ("serve", "enroll", "tls", "-h", "--help"):
+    if not argv or argv[0] not in ("serve", "enroll", "tls", "notify", "-h", "--help"):
         argv.insert(0, "serve")  # `pasture` alone, or with serve's flags
     args = parser.parse_args(argv)
     if args.cmd == "tls":
         (cmd_tls_init if args.tls_cmd == "init" else cmd_tls_phone)(args)
+    elif args.cmd == "notify":
+        cmd_notify(args)
     else:
         (cmd_enroll if args.cmd == "enroll" else cmd_serve)(args)
 

@@ -123,7 +123,29 @@ agent needs you, when one finishes, or both. iPhone needs iOS 16.4 or later
 and the app on the Home Screen.
 
 Alerts go through your phone's push service (Apple's for an iPhone), encrypted
-end to end; the service sees only that a message of some size arrived.
+end to end; the service sees only that a message of some size arrived. No
+Apple Developer account or other service is needed: pasture signs pushes with
+its own key (VAPID), made on first use.
+
+Where alerts come from:
+
+- **herdr agents**: automatically, when one starts waiting for you or finishes.
+- **Any other agent**: its hooks call `pasture notify`. For Claude Code, add to
+  `~/.claude/settings.json` (on NixOS, set `services.pasture.notify.claudeCode`
+  instead):
+
+  ```json
+  {
+    "hooks": {
+      "Notification": [{ "hooks": [{ "type": "command", "command": "pasture notify --hook claude notification", "async": true }] }],
+      "Stop": [{ "hooks": [{ "type": "command", "command": "pasture notify --hook claude stop", "async": true }] }]
+    }
+  }
+  ```
+
+  `--hook <agent> <stop|notification>` reads the hook's JSON from stdin and
+  never fails or slows the agent. For anything else:
+  `pasture notify --kind done --agent build "Release is out"`.
 
 ## 6. Dictation (the mic button)
 

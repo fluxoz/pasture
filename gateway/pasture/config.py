@@ -108,6 +108,7 @@ class Config:
     push: bool = True  # Web Push to devices that turn it on
     tls_cert: Path | None = None  # serve HTTPS ourselves (own CA; tailscale serve forwards TCP)
     tls_key: Path | None = None
+    notify_token_file: Path | None = None  # `pasture notify` (agent hooks) proves itself with this
     push_subject: str | None = None  # VAPID contact; default https://<host>
 
     cert_file: Path | None = None
@@ -221,6 +222,7 @@ def load() -> Config:
         cfg.session_key_file = ensure_secret(cfg.state_dir / "session-key", lambda: secrets.token_bytes(48))
     if cfg.enroll_token_file is None:
         cfg.enroll_token_file = ensure_secret(cfg.state_dir / "enroll-token", new_token)
+    cfg.notify_token_file = ensure_secret(cfg.state_dir / "notify-token", new_token)
     if cfg.dictate and not (cfg.whisper and cfg.whisper_model):
         raise ConfigError("dictation needs PASTURE_DICTATE_SERVER (whisper-server) and PASTURE_DICTATE_MODEL")
     return cfg

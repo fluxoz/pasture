@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import hmac
 import ipaddress
 import json
 import logging
 import mimetypes
 import os
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -152,7 +154,7 @@ class Gateway:
         self.shell = ShellProvider(cfg) if cfg.shell_enable else None
         self.tmux = TmuxProvider(cfg, self.hub) if cfg.tmux else None
         self.herdr = HerdrProvider(cfg, self.hub) if cfg.herdr else None
-        self.alerts = AlertsProvider(cfg, self.hub) if cfg.ntfy_url else None
+        self.alerts = AlertsProvider(cfg, self.hub)  # the inbox: `pasture notify`, and ntfy if configured
         self.dictation = Dictation(cfg) if cfg.dictate else None
         for provider in (self.shell, self.tmux, self.herdr, self.alerts):
             if provider is not None:
@@ -483,6 +485,39 @@ class Gateway:
             return json_error(e.status, str(e))
         return web.json_response({"ok": True})
 
+    async def api_notify(self, request: web.Request) -> web.Response:
+        """An alert from an agent hook on this machine (`pasture notify`).
+
+        Not a browser endpoint: it needs the token from the state dir, which only
+        this user can read."""
+        expected = read_secret(self.cfg.notify_token_file)
+        given = (request.headers.get("X-Pasture-Notify") or "").encode()
+        if len(expected) < 16 or not hmac.compare_digest(given, expected):
+            return json_error(403, "bad notify token")
+        try:
+            body = await request.json()
+            kind = body.get("kind") if body.get("kind") in ("blocked", "done", "info") else "info"
+            agent = validate.label(body["agent"], 64) if body.get("agent") else None
+            project = validate.label(body["project"], 64) if body.get("project") else None
+            title = str(body.get("title") or "")[:200]
+            message = str(body.get("message") or "")[:1000]
+        except (ValueError, AttributeError, validate.Invalid):
+            return json_error(400, "bad request")
+        name = agent or "agent"
+        item = {
+            "id": f"local:{time.time_ns()}",
+            "time": int(time.time()),
+            "title": title or (f"{name} - {project}" if project else name),
+            "message": message,
+            "agent": agent,
+            "project": project,
+            "kind": kind,
+            "pushTitle": title or {"blocked": f"{name} needs you", "done": f"{name} is done"}.get(kind, name),
+            "pushBody": " · ".join(x for x in (project, message) if x)[:180],
+        }
+        self.alerts.add(item)
+        return web.json_response({"ok": True})
+
     async def api_presence(self, request: web.Request) -> web.Response:
         # No touch: an app left open in front must still time out.
         self.require(request, touch=False)
@@ -653,6 +688,7 @@ class Gateway:
         r.add_post("/api/push/unsubscribe", self.api_push_unsubscribe)
         r.add_post("/api/push/test", self.api_push_test)
         r.add_post("/api/presence", self.api_presence)
+        r.add_post("/api/notify", self.api_notify)
         r.add_get("/ws/term", self.ws_term)
         r.add_get("/ws/dictate", self.ws_dictate)
         r.add_get("/{path:.*}", self.static_handler)

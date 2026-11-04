@@ -1,4 +1,5 @@
 import json
+import os
 import unittest
 
 from pasture.auth import Auth, AuthError, RateLimiter
@@ -38,7 +39,8 @@ class AuthTest(TempDir, unittest.TestCase):
         self.assertEqual(self.login(), record["id"])
         enrolled = json.loads((self.cfg.state_dir / "enrolled.json").read_text())
         self.assertEqual(enrolled[0]["public_key"], record["public_key"])
-        self.assertEqual((self.cfg.state_dir / "enrolled.json").stat().st_mode & 0o777, 0o600)
+        if os.name == "posix":
+            self.assertEqual((self.cfg.state_dir / "enrolled.json").stat().st_mode & 0o777, 0o600)
 
     def test_token_is_single_use(self):
         self.enroll()

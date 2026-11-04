@@ -1,4 +1,5 @@
-"""Alerts provider: an inbox fed by an ntfy topic on loopback.
+"""Alerts provider: the inbox. Fed by `pasture notify` (agent hooks on this
+machine) and, when configured, an ntfy topic on loopback.
 
 Streams `<url>/<topic>/json` and keeps the last 50 messages. Titles in the
 form "<agent> - <project> (<host>)" are split so the dashboard can match an
@@ -54,10 +55,17 @@ class AlertsProvider:
         self._task: asyncio.Task | None = None
 
     def state(self) -> dict:
-        return {"connected": self.connected, "items": list(reversed(self.items))}
+        return {"ntfy": bool(self.cfg.ntfy_url), "connected": self.connected, "items": list(reversed(self.items))}
+
+    def add(self, item: dict) -> None:
+        """An alert from this machine (`pasture notify`)."""
+        self.items.append(item)
+        self.hub.alert(item)
+        self.hub.changed()
 
     async def start(self) -> None:
-        self._task = asyncio.create_task(self._loop())
+        if self.cfg.ntfy_url:
+            self._task = asyncio.create_task(self._loop())
 
     async def stop(self) -> None:
         if self._task:
