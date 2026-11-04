@@ -11,6 +11,9 @@
                          for installing it on the phone
     pasture notify       send an alert to your phone (inbox and push); with
                          --hook, from a Claude Code or Grok hook
+    pasture doctor       check everything and say what to fix (--json for agents)
+    pasture hooks        report Claude Code / Grok sessions to pasture
+    pasture service      install pasture as a background service (or remove it)
 
 HTTPS comes from the node's ts.net certificate (`tailscale serve`), or, after
 `pasture tls init`, from your own CA: the gateway then terminates TLS itself
@@ -142,14 +145,6 @@ def enroll_url(host: str, token: str, https_port: int = 443) -> str:
     return f"https://{host}{port}/enroll#t={quote(token, safe='')}"
 
 
-def gateway_says_open(port: int) -> bool | None:
-    try:
-        with urllib.request.urlopen(f"http://127.0.0.1:{port}/auth/info", timeout=3) as r:
-            return bool(json.load(r).get("enroll"))
-    except (urllib.error.URLError, OSError, ValueError):
-        return None
-
-
 # -- commands -------------------------------------------------------------------
 
 ENROLL_HINT = "Scan it with your phone's camera, open the link, tap Create passkey. The code works once."
@@ -161,7 +156,8 @@ def cmd_enroll(args) -> None:
     token_file = os.environ.get("PASTURE_ENROLL_TOKEN_FILE")
     if token_file:  # a token from a secrets manager: shown, never rewritten
         token = Path(token_file).read_text().strip()
-        if gateway_says_open(args.port) is False:
+        info = gateway_info(state, args.port)
+        if info is not None and not info.get("enroll"):
             raise SystemExit("pasture: enrollment is closed: that token was used. Rotate it in your secrets and redeploy.")
     else:
         token = fresh_token(state, renew=args.new)
@@ -251,13 +247,10 @@ def notify_body(args, stdin: str = "") -> dict:
     return {k: v for k, v in body.items() if v}
 
 
-def post_notify(state: Path, port: int, body: dict) -> None:
-    """POST to the gateway on loopback: HTTPS with our own CA if there is one, else HTTP."""
+def local_request(state: Path, port: int, path: str, body: dict | None = None, headers: dict | None = None) -> bytes:
+    """A request to this machine's gateway: HTTPS with our own CA if there is one, else HTTP."""
     from . import tls
 
-    token = (state / "notify-token").read_text().strip()
-    data = json.dumps(body).encode()
-    headers = {"Content-Type": "application/json", "X-Pasture-Notify": token}
     own = tls.paths(state)
     attempts = []
     if own["cert"].exists():
@@ -265,18 +258,31 @@ def post_notify(state: Path, port: int, body: dict) -> None:
         ctx.check_hostname = False  # loopback; the CA check still applies
         attempts.append((f"https://127.0.0.1:{port}", ctx))
     attempts.append((f"http://127.0.0.1:{port}", None))
+    data = json.dumps(body).encode() if body is not None else None
+    hdrs = {"Content-Type": "application/json", **(headers or {})} if body is not None else dict(headers or {})
     error: Exception | None = None
     for base, ctx in attempts:
         try:
-            req = urllib.request.Request(base + "/api/notify", data=data, headers=headers, method="POST")
+            req = urllib.request.Request(base + path, data=data, headers=hdrs, method="POST" if data else "GET")
             with urllib.request.urlopen(req, timeout=3, context=ctx) as r:
-                r.read()
-            return
+                return r.read()
         except urllib.error.HTTPError:
             raise
         except (urllib.error.URLError, OSError) as e:
             error = e
     raise error or OSError("gateway not reachable")
+
+
+def post_notify(state: Path, port: int, body: dict) -> None:
+    token = (state / "notify-token").read_text().strip()
+    local_request(state, port, "/api/notify", body, {"X-Pasture-Notify": token})
+
+
+def gateway_info(state: Path, port: int) -> dict | None:
+    try:
+        return json.loads(local_request(state, port, "/auth/info"))
+    except (OSError, ValueError, urllib.error.HTTPError):
+        return None
 
 
 def cmd_notify(args) -> None:
@@ -287,6 +293,41 @@ def cmd_notify(args) -> None:
         if args.hook:
             return  # a hook must never fail or slow the agent
         raise SystemExit(f"pasture: could not reach the gateway on port {args.port}: {e}")
+
+
+def cmd_doctor(args) -> None:
+    from . import doctor
+
+    raise SystemExit(doctor.report(doctor.run(state_dir(args.state), args.port, args.https_port), args.json))
+
+
+def cmd_hooks(args) -> None:
+    from . import install
+
+    if args.agent == "claude":
+        if not args.install:
+            print(json.dumps({"hooks": install.claude_hooks()}, indent=2))
+            print(f"(add to {install.claude_settings()}, or run `pasture hooks claude --install`)", file=sys.stderr)
+            return
+        path = Path(args.settings).expanduser() if args.settings else None
+        changed = install.install_claude_hooks(path)
+        where = path or install.claude_settings()
+        print(f"Claude Code hooks {'added to' if changed else 'already in'} {where}. New Claude sessions report to pasture.")
+    else:
+        if not args.install:
+            print(json.dumps({"hooks": {"Stop": [{"hooks": [install.hook("grok", "stop")]}]}}, indent=2))
+            return
+        print(f"Grok hooks written to {install.install_grok_hooks()}.")
+
+
+def cmd_service(args) -> None:
+    from . import install
+
+    extra = [a for a in args.serve_args if a != "--"]
+    if args.action == "install":
+        install.install_service(extra, dry_run=args.dry_run)
+    else:
+        install.uninstall_service(dry_run=args.dry_run)
 
 
 def cmd_serve(args) -> None:
@@ -354,7 +395,10 @@ def cmd_serve(args) -> None:
 
 
 def main(argv: list[str] | None = None) -> None:
+    from . import __version__
+
     parser = argparse.ArgumentParser(prog="pasture", description=__doc__.split("\n\n")[0].split("\n")[0])
+    parser.add_argument("--version", action="version", version=f"pasture {__version__}")
     sub = parser.add_subparsers(dest="cmd")
 
     def common(p):
@@ -380,6 +424,17 @@ def main(argv: list[str] | None = None) -> None:
     notify.add_argument("--hook", nargs=2, metavar=("AGENT", "EVENT"), help="read a Claude Code / Grok hook's JSON on stdin; EVENT is stop or notification")
     notify.add_argument("--port", type=int, default=int(os.environ.get("PASTURE_PORT", "8795")), help="loopback port of the gateway")
     notify.add_argument("--state", help="state directory")
+    doctor_cmd = sub.add_parser("doctor", help="check everything and say what to fix")
+    common(doctor_cmd)
+    doctor_cmd.add_argument("--json", action="store_true", help="machine-readable, for agents")
+    hooks = sub.add_parser("hooks", help="report agent sessions to pasture (inbox and push)")
+    hooks.add_argument("agent", choices=["claude", "grok"])
+    hooks.add_argument("--install", action="store_true", help="write the hooks (Claude: merged into settings.json, with a backup)")
+    hooks.add_argument("--settings", help="Claude Code settings file (default: ~/.claude/settings.json)")
+    service = sub.add_parser("service", help="run pasture in the background (systemd, launchd, Windows Startup)")
+    service.add_argument("action", choices=["install", "uninstall"])
+    service.add_argument("--dry-run", action="store_true", help="print what would be written and run")
+    service.add_argument("serve_args", nargs=argparse.REMAINDER, help="after --: options for `pasture serve`")
     tls_cmd = sub.add_parser("tls", help="your own CA instead of the ts.net certificate")
     tls_sub = tls_cmd.add_subparsers(dest="tls_cmd", required=True)
     init = tls_sub.add_parser("init", help="make the CA and a certificate for this node")
@@ -396,13 +451,13 @@ def main(argv: list[str] | None = None) -> None:
             except (AttributeError, ValueError):
                 pass
     argv = list(sys.argv[1:] if argv is None else argv)
-    if not argv or argv[0] not in ("serve", "enroll", "tls", "notify", "-h", "--help"):
+    if not argv or argv[0] not in ("serve", "enroll", "tls", "notify", "doctor", "hooks", "service", "-h", "--help", "--version"):
         argv.insert(0, "serve")  # `pasture` alone, or with serve's flags
     args = parser.parse_args(argv)
     if args.cmd == "tls":
         (cmd_tls_init if args.tls_cmd == "init" else cmd_tls_phone)(args)
-    elif args.cmd == "notify":
-        cmd_notify(args)
+    elif args.cmd in ("notify", "doctor", "hooks", "service"):
+        {"notify": cmd_notify, "doctor": cmd_doctor, "hooks": cmd_hooks, "service": cmd_service}[args.cmd](args)
     else:
         (cmd_enroll if args.cmd == "enroll" else cmd_serve)(args)
 

@@ -1,226 +1,191 @@
-# Setting up pasture
+# Getting started
 
-This guide takes you from nothing to your phone talking to your agents:
-Tailscale, HTTPS (Tailscale's certificate or your own CA), the passkey, and
-keeping pasture running. For NixOS, see the [README](../README.md#nixos).
+From nothing to your phone talking to your agents, on Linux, macOS or
+Windows. NixOS has its own guide: [nixos.md](nixos.md). Would rather have
+your coding agent do it? See [Let your agent set it up](../README.md#let-your-agent-set-it-up).
+
+At any point, `pasture doctor` checks everything and says what to fix next.
 
 ## 1. Tailscale on the machine and the phone
 
 pasture is reachable only on your tailnet, so both ends need Tailscale.
 
-1. Install Tailscale on the machine that runs your agents
-   ([downloads](https://tailscale.com/download)) and log in.
-2. Install the Tailscale app on your phone and log in to the same tailnet.
+1. Install [Tailscale](https://tailscale.com/download) on the machine where
+   your agents run, and log in.
+2. Install the Tailscale app on your phone and log in to the **same** tailnet.
+   Keep it connected when you use pasture.
 3. In the [admin console](https://login.tailscale.com/admin/dns), turn on
-   **MagicDNS**. Your machine now has a name like
-   `myhost.your-tailnet.ts.net`. That name is what the phone opens, and your
-   passkey is bound to it, so keep it (rename the machine before you enroll,
-   not after).
-4. If you share the tailnet with others, limit who can reach the machine with
-   an [ACL](https://tailscale.com/kb/1018/acls): pasture is a shell on your
-   machine.
+   **MagicDNS**. Your machine now has a name like `myhost.your-tailnet.ts.net`.
+   That is the address the phone opens, and your passkey is tied to it: if you
+   want a different machine name, rename it now, before you enroll.
+4. If anyone else is on your tailnet, use an
+   [ACL](https://tailscale.com/kb/1018/acls) so only your devices reach this
+   machine. pasture is a shell on it.
 
-## 2. Get pasture
+## 2. Install pasture
 
 | Platform | Get it |
 |---|---|
-| Linux (x86_64, arm64) | `pasture-linux-*` from [Releases](https://github.com/fluxoz/pasture/releases), or `nix run github:fluxoz/pasture` |
+| Linux (x86_64, arm64) | `pasture-linux-*` from [Releases](https://github.com/fluxoz/pasture/releases) |
 | macOS (Apple Silicon, Intel) | `pasture-macos-*` from Releases |
 | Windows (x86_64) | `pasture-windows-x86_64.exe` from Releases |
-| Anything with Python 3.11+ | `pip install pasture-*.whl` (from Releases) |
+| Linux or macOS with Nix | `nix run github:fluxoz/pasture` (or the [home-manager module](nixos.md#home-manager)) |
+| Anything with Python 3.11+ | `pip install pasture-*.whl` from Releases |
+
+Linux and macOS:
 
 ```sh
-chmod +x pasture-linux-x86_64 && mv pasture-linux-x86_64 ~/.local/bin/pasture
+chmod +x pasture-macos-arm64
+mkdir -p ~/.local/bin && mv pasture-macos-arm64 ~/.local/bin/pasture   # make sure ~/.local/bin is on PATH
+xattr -d com.apple.quarantine ~/.local/bin/pasture                    # macOS only: the binary is not notarized
 ```
 
-On macOS the binary is not notarized: after downloading, run
-`xattr -d com.apple.quarantine pasture-macos-arm64` (or right-click → Open
-once). On Windows, SmartScreen may ask you to confirm the first run.
+Windows: put `pasture-windows-x86_64.exe` somewhere permanent, e.g.
+`%LOCALAPPDATA%\pasture\pasture.exe`, and run it from PowerShell. SmartScreen
+asks once ("More info" → "Run anyway").
 
-What you get per platform:
+What you get:
 
-- **Linux and macOS**: terminals are your login shell; tmux and
-  [herdr](https://herdr.dev) dashboards when they are installed.
+- **Linux and macOS**: terminals are your login shell; the tmux dashboard if
+  tmux is installed; the agent dashboard if [herdr](https://herdr.dev) is.
 - **Windows**: terminals are PowerShell (ConPTY). tmux and herdr do not run on
-  Windows; agents in PowerShell windows work, the agent dashboard does not.
+  Windows, so there is no agent dashboard; terminals, dictation and
+  notifications work.
 
-## 3. HTTPS: pick one
+## 3. Choose HTTPS
 
-Passkeys only work on an HTTPS page the phone trusts. Two ways:
+Passkeys need an HTTPS page the phone trusts. Pick one; [tls.md](tls.md) has
+the details.
 
-### A. Tailscale's certificate (simplest)
+- **Tailscale's certificate** (one switch): turn on **HTTPS certificates** on
+  the [DNS page](https://login.tailscale.com/admin/dns). Nothing to install on
+  the phone. Your machine's name ends up in public Certificate Transparency
+  logs (known, not reachable).
+- **Your own CA** (nothing public): run `pasture tls init`, then
+  `pasture tls phone` and scan the QR code to install and trust the CA on the
+  phone ([step by step](tls.md#your-own-ca)). The CA can only ever vouch for
+  this one machine's name.
 
-Turn on **HTTPS certificates** in the admin console (DNS page). pasture then
-uses `tailscale serve`, which gets a Let's Encrypt certificate for your
-`ts.net` name. Nothing to install on the phone.
-
-The trade-off: public certificates are logged in
-[Certificate Transparency](https://certificate.transparency.dev/) logs, so your
-machine's `ts.net` name becomes public (not reachable, but known).
-
-### B. Your own CA (nothing public)
-
-Make a certificate authority that can only vouch for this one machine's name,
-and teach your phone to trust it.
+## 4. Start pasture and enroll your phone
 
 ```sh
-pasture tls init      # a CA and a certificate for this machine's MagicDNS name
-pasture tls phone     # serves the CA on your tailnet and prints a QR code
+pasture
 ```
 
-The CA carries an X.509 *name constraint*: even if its key leaked, it could not
-sign a certificate for any other site, so trusting it on your phone risks
-nothing beyond pasture. The keys stay in pasture's state directory.
+It finds the machine's name, sets up `tailscale serve`, and the first time
+prints a QR code.
 
-Scan the QR code with the phone's camera; the page walks you through it:
+- **Linux**: if it says `tailscale serve` needs permission, run
+  `sudo tailscale set --operator=$USER` once and start it again.
+- **Windows**: if Tailscale says access is denied, run the command pasture
+  prints once in an administrator PowerShell.
 
-**iPhone / iPad**
+On the phone:
 
-1. Tap **Download the certificate**, then **Allow**.
-2. Open Settings. Tap **Profile Downloaded** near the top (or General → VPN &
-   Device Management), then **Install** and enter your passcode.
-3. Settings → General → About → **Certificate Trust Settings**: turn on
-   **pasture CA (your machine's name)**. iOS will not trust it for websites
-   until you do this.
+1. Scan the QR code with the **camera** and open the link (Safari on iPhone).
+2. Tap **Create passkey** and confirm with Face ID or your fingerprint.
+3. Install the app: Share → **Add to Home Screen** (iPhone), or ⋮ → **Install
+   app** (Android Chrome). Open it and tap **Unlock**.
 
-**Android**
+The code works once. `pasture enroll` makes a new one for another device.
 
-1. Tap **Download the certificate**.
-2. Settings → Security → Encryption & credentials → **Install a certificate**
-   → **CA certificate**, and pick the downloaded file.
-
-Press Ctrl-C in the terminal once the phone has it. From now on
-`pasture serve` terminates TLS itself with your certificate and asks Tailscale
-only to forward TCP (`tailscale serve --tcp`), so Tailscale never needs to
-issue a certificate. The certificate is valid for 800 days (iOS's limit is
-825); `pasture tls init --renew` issues a new one from the same CA, nothing to
-reinstall on the phone.
-
-## 4. Start it and enroll your phone
+## 5. Keep it running
 
 ```sh
-pasture            # same as `pasture serve`
+pasture service install
 ```
 
-On Linux, `tailscale serve` needs permission once:
-`sudo tailscale set --operator=$USER`. pasture prints the exact command if it
-is missing. On Windows, run the printed command once in an administrator
-terminal if Tailscale says access is denied.
+That is a systemd user service on Linux, a launchd agent on macOS and a
+Startup-folder entry on Windows, running `pasture serve` with the PATH and any
+`PASTURE_*` settings of the shell you run it from. Options for `serve` go after
+`--`, e.g. `pasture service install -- --name devbox`.
 
-The first time, pasture prints a QR code:
+- Linux: `loginctl enable-linger $USER` keeps it running while you are logged
+  out. Logs: `journalctl --user -u pasture -f`.
+- macOS logs: `~/Library/Logs/pasture.log`.
+- `pasture service uninstall` removes it; `--dry-run` shows what it would do.
 
-1. Scan it with the phone's camera and open the link (Safari on iPhone).
-2. Tap **Create passkey** and confirm with Face ID.
-3. Share → **Add to Home Screen**. Open the installed app and tap **Unlock**.
+## 6. Notifications on the lock screen
 
-The code works once. For another device: `pasture enroll`.
+In the installed app: ⋮ → **Push notifications** → Allow → **Send a test**,
+then lock the phone. Choose alerts for "needs you", "finishes", or both.
+(iPhone: iOS 16.4 or later, the app on the Home Screen.)
 
-## 5. Notifications
-
-In the installed app: ⋮ → **Push notifications**, allow them, then
-**Send a test** and lock the phone. Choose whether you want an alert when an
-agent needs you, when one finishes, or both. iPhone needs iOS 16.4 or later
-and the app on the Home Screen.
-
-Alerts go through your phone's push service (Apple's for an iPhone), encrypted
-end to end; the service sees only that a message of some size arrived. No
-Apple Developer account or other service is needed: pasture signs pushes with
-its own key (VAPID), made on first use.
+No account and no notification app: pasture signs pushes with its own key and
+sends them to your phone's push service (Apple's or Google's), encrypted end
+to end.
 
 Where alerts come from:
 
 - **herdr agents**: automatically, when one starts waiting for you or finishes.
-- **Any other agent**: its hooks call `pasture notify`. For Claude Code, add to
-  `~/.claude/settings.json` (on NixOS, set `services.pasture.notify.claudeCode`
-  instead):
+- **Claude Code**: `pasture hooks claude --install` adds two hooks to
+  `~/.claude/settings.json` (merged in; a backup is kept). New sessions report
+  to pasture, inside herdr or not. Grok Build: `pasture hooks grok --install`.
+- **Anything else**: `pasture notify --kind done --agent build "Release is out"`.
 
-  ```json
-  {
-    "hooks": {
-      "Notification": [{ "hooks": [{ "type": "command", "command": "pasture notify --hook claude notification", "async": true }] }],
-      "Stop": [{ "hooks": [{ "type": "command", "command": "pasture notify --hook claude stop", "async": true }] }]
-    }
-  }
-  ```
+While the app is open in front, alerts show inside it instead of as a push.
 
-  `--hook <agent> <stop|notification>` reads the hook's JSON from stdin and
-  never fails or slows the agent. For anything else:
-  `pasture notify --kind done --agent build "Release is out"`.
+## 7. Dictation
 
-## 6. Dictation (the mic button)
-
-pasture runs whisper.cpp's `whisper-server` on your machine. Give it the server
-and a model:
+pasture runs whisper.cpp's `whisper-server` on your machine. Point it at the
+server and a model, then restart pasture (or re-run `pasture service install`
+from that shell so the service keeps the settings):
 
 ```sh
 export PASTURE_DICTATE_SERVER=/path/to/whisper-server
 export PASTURE_DICTATE_MODEL=/path/to/ggml-small.en-q8_0.bin
-pasture
 ```
 
-- Models: [ggml-base.en-q8_0.bin](https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en-q8_0.bin)
-  (fast on a CPU) or
-  [ggml-small.en-q8_0.bin](https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en-q8_0.bin)
+- Models: [base.en q8](https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en-q8_0.bin)
+  (fine on a CPU) or [small.en q8](https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en-q8_0.bin)
   (better, wants a GPU).
 - macOS: `brew install whisper-cpp` (Metal on Apple Silicon).
-- Windows: the [whisper.cpp releases](https://github.com/ggml-org/whisper.cpp/releases)
+- Windows: [whisper.cpp releases](https://github.com/ggml-org/whisper.cpp/releases)
   have CPU, CUDA and Vulkan builds.
 - Linux with Nix: `nix run github:fluxoz/pasture#pasture-dictation` bundles a
   CPU build and the base.en model.
 
-With a GPU the text lands about 50 ms after you stop talking; on a fast CPU,
-about half a second. Speak, pause, and it types the text and presses Enter
-(change both in a terminal's ⋮ menu).
+In a terminal, tap the mic, talk, pause: the text is typed and Enter pressed.
+The pause length and the Enter are per-device settings in the terminal's ⋮
+menu. With a GPU the text lands about 50 ms after you stop; on a fast CPU,
+about half a second.
 
-## 7. Keep it running
-
-**Linux (systemd user service)**: `~/.config/systemd/user/pasture.service`:
-
-```ini
-[Unit]
-Description=pasture
-After=network-online.target
-
-[Service]
-ExecStart=%h/.local/bin/pasture serve
-Restart=on-failure
-
-[Install]
-WantedBy=default.target
-```
+## 8. Check it
 
 ```sh
-systemctl --user enable --now pasture
-loginctl enable-linger $USER    # keep running while logged out
+pasture doctor
 ```
 
-With home-manager, use the module instead (README).
+Every line is ✓, or says what to do next.
 
-**macOS (launchd)**: `~/Library/LaunchAgents/dev.pasture.plist`:
+## Day to day
 
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-  <key>Label</key><string>dev.pasture</string>
-  <key>ProgramArguments</key><array><string>/usr/local/bin/pasture</string><string>serve</string></array>
-  <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><true/>
-  <key>StandardErrorPath</key><string>/tmp/pasture.log</string>
-</dict></plist>
-```
+**Another device**: `pasture enroll`, scan, Create passkey, install the app.
 
-```sh
-launchctl load ~/Library/LaunchAgents/dev.pasture.plist
-```
+**Remove a device**: open `~/.local/state/pasture/enrolled.json`
+(`%LOCALAPPDATA%\pasture\enrolled.json` on Windows), delete that device's entry
+(each has a `label` and a `created` date), then restart pasture. Its sessions
+end, and it gets no more notifications.
 
-**Windows**: Task Scheduler → Create Task → trigger **At log on**, action
-`pasture-windows-x86_64.exe serve`, and "Run only when user is logged on" (the
-terminals are your desktop session's).
+**Update**: replace the binary with the new release and restart the service
+(`systemctl --user restart pasture`, or `launchctl kickstart -k gui/$UID/dev.pasture`,
+or log out and in on Windows). With Nix: `nix run --refresh github:fluxoz/pasture`.
+Passkeys and settings are kept. The phone app offers "New version ready".
+
+**Back up**: the state directory holds your passkeys and, with your own CA, the
+CA. Copy it if you want to restore without enrolling again.
+
+**Uninstall**: `pasture service uninstall`; `tailscale serve --https=443 off`
+(with your own CA: `tailscale serve --tcp=443 off`); delete the state
+directory; delete the app from the phone, and with your own CA remove its
+profile ([how](tls.md#removing-the-ca-from-the-phone)).
 
 ## Where things live
 
-- State (session key, enrollment code, passkeys, push subscriptions, TLS keys):
-  `~/.local/state/pasture` (Linux, macOS), `%LOCALAPPDATA%\pasture` (Windows).
-- Logs: the terminal you started it in, or `journalctl --user -u pasture`.
-- Start over: stop pasture and delete the state directory; then enroll again.
+| | Linux, macOS | Windows |
+|---|---|---|
+| State: passkeys, keys, push subscriptions, your CA | `~/.local/state/pasture` | `%LOCALAPPDATA%\pasture` |
+| Service | `~/.config/systemd/user/pasture.service`, `~/Library/LaunchAgents/dev.pasture.plist` | Startup folder: `pasture.cmd` |
+| Logs | `journalctl --user -u pasture`, `~/Library/Logs/pasture.log` | the window it runs in |
+
+Something off? [troubleshooting.md](troubleshooting.md).

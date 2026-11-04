@@ -23,95 +23,63 @@ installed on your phone's home screen.
   Passkey login (Face ID), one-time QR enrollment, reachable only on your
   tailnet. No accounts, no telemetry, no CDN.
 
-## Quick start
+## Get started
 
-**[The setup guide](docs/setup.md)** walks through everything: Tailscale on
-both ends, HTTPS with Tailscale's certificate or your own CA installed on the
-phone, enrolling, notifications, dictation, and running it as a service.
+You need [Tailscale](https://tailscale.com/download) on the machine and on the
+phone, with MagicDNS on. Then:
 
-### Linux, macOS, Windows
+```sh
+# 1. Install: a binary from Releases (Linux, macOS, Windows), or `nix run github:fluxoz/pasture`
+curl -fL -o ~/.local/bin/pasture https://github.com/fluxoz/pasture/releases/latest/download/pasture-linux-x86_64
+chmod +x ~/.local/bin/pasture
 
-1. Install [Tailscale](https://tailscale.com/download) on the machine and the
-   phone; turn on **MagicDNS** in the admin console.
-2. Download `pasture` for your platform from
-   [Releases](https://github.com/fluxoz/pasture/releases) (or, with Nix on Linux
-   or macOS, `nix run github:fluxoz/pasture`).
-3. Pick HTTPS: turn on **HTTPS certificates** in the Tailscale admin console,
-   or keep your machine's name private with your own CA:
-   `pasture tls init`, then `pasture tls phone` and scan the QR code to trust
-   it on the phone ([how](docs/setup.md#b-your-own-ca-nothing-public)).
-4. Run `pasture`. It finds your machine's `*.ts.net` name, serves itself on it
-   with `tailscale serve`, and prints a QR code.
-5. Scan the QR code with your phone's camera, open the link, tap **Create
-   passkey**. Then Share → **Add to Home Screen**, open the app, tap **Unlock**.
+# 2. HTTPS: turn on "HTTPS certificates" in the Tailscale admin console, or use your own CA:
+pasture tls init && pasture tls phone     # then trust the CA on the phone (scan the QR code)
 
-On Linux, `tailscale serve` needs permission once:
-`sudo tailscale set --operator=$USER`. `pasture enroll` prints a new one-time
-QR code for another device.
+# 3. Run it (always on), and enroll the phone: scan the QR code, Create passkey, Add to Home Screen
+pasture service install
+pasture enroll
 
-### home-manager (Linux, macOS)
-
-```nix
-# flake inputs
-inputs.pasture.url = "github:fluxoz/pasture";
-
-# your home configuration
-{ inputs, ... }:
-{
-  imports = [ inputs.pasture.homeManagerModules.default ];
-  services.pasture = {
-    enable = true;
-    # dictation = true;   # bundle whisper.cpp (CPU) and the base.en model
-  };
-}
+# 4. Claude Code sessions notify the phone; check that everything is in place
+pasture hooks claude --install
+pasture doctor
 ```
 
-It runs `pasture serve` as a systemd user service on Linux (run
-`loginctl enable-linger $USER` so it keeps running while you are logged out)
-or a launchd agent on macOS. `pasture enroll` prints the QR code.
-
-### NixOS
+The full walk-through, including the phone side, is
+**[docs/setup.md](docs/setup.md)**. On NixOS, add the module instead
+([docs/nixos.md](docs/nixos.md)):
 
 ```nix
-# flake inputs
-inputs.pasture = {
-  url = "github:fluxoz/pasture";
-  inputs.nixpkgs.follows = "nixpkgs";
+services.pasture = {
+  enable = true;
+  user = "alice";
+  hostName = "myhost.your-tailnet.ts.net";
 };
-
-# a host module
-{ inputs, ... }:
-{
-  imports = [ inputs.pasture.nixosModules.default ];
-  services.tailscale.enable = true;
-  services.pasture = {
-    enable = true;
-    user = "alice";
-    hostName = "myhost.your-tailnet.ts.net"; # this machine's MagicDNS name
-  };
-}
 ```
 
-Deploy, then run `pasture-enroll` as `alice` for the QR code.
-[examples/agents-host.nix](examples/agents-host.nix) adds herdr and GPU
-dictation; [examples/tailnet-host.nix](examples/tailnet-host.nix) serves with
-nginx and your own certificate instead of `tailscale serve`, so the host name
-never appears in Certificate Transparency logs.
+## Let your agent set it up
 
-## On the phone
+Point your coding agent at this repository:
 
-- **Enroll**: scan the QR code, open the link in Safari, tap Create passkey.
-  The code works once.
-- **Install**: Share → Add to Home Screen. The installed app keeps its own
-  cookies, so it asks you to Unlock once; the passkey itself is shared.
-- **Notifications**: ⋮ → Push notifications (iOS 16.4+ in the installed app,
-  or Android Chrome). Choose "needs you" and/or "finishes", then Send a test.
-- **Dictation**: the round mic at the right of the key bar. Tap to start, or
-  hold while you talk. In a terminal's ⋮ menu: how long a pause ends the
-  recording (0.6 to 2.5 s, or off) and whether it then presses Enter.
+> Set up pasture on this machine so I can use it from my phone. Follow
+> https://github.com/fluxoz/pasture/blob/main/AGENTS.md
 
-Tested on iPhone. Android should work (Chrome has passkeys, Web Push and
-AudioWorklet) but is untested.
+[AGENTS.md](AGENTS.md) tells it what to check (`pasture doctor --json`), what
+to ask you (HTTPS mode, background service, hooks), what only you can do (scan,
+Face ID, Add to Home Screen) and what never to do (expose it beyond your
+tailnet, run it as root).
+
+## Documentation
+
+- [Getting started](docs/setup.md): Tailscale, install, HTTPS, enrolling,
+  running it as a service, notifications, dictation, updating, uninstalling.
+- [HTTPS and certificates](docs/tls.md): Tailscale's certificate or your own
+  CA, installing the CA on iPhone and Android, renewing, NixOS with nginx and
+  sops-nix.
+- [NixOS and home-manager](docs/nixos.md): the modules, herdr, GPU dictation,
+  Claude Code hooks, passkeys from your secrets manager.
+- [Troubleshooting](docs/troubleshooting.md)
+- [Security model](SECURITY.md)
 
 ## Works with
 
@@ -194,27 +162,22 @@ All under `services.pasture`; only `enable`, `user` and `hostName` are required.
 
 ### The `pasture` command
 
-`pasture serve` (the default) takes `--host` (default: the MagicDNS name),
-`--port`, `--https-port`, `--name`, `--state`, `--no-tailscale-serve` and
-`--tailscale-cert` (ignore your own CA). `pasture enroll [--new]` prints the
-QR code. `pasture tls init [--renew]` makes your own CA and certificate;
-`pasture tls phone` serves the CA for the phone. `pasture notify [--kind
-done|blocked|info] [--agent A] [--project P] TEXT` sends an alert; `--hook
-AGENT EVENT` takes a hook's JSON on stdin. tmux, herdr and `whisper-server`
-are used when they are on `PATH`; `PASTURE_*` environment variables (see
-[gateway/pasture/config.py](gateway/pasture/config.py)) set the rest.
+| Command | |
+|---|---|
+| `pasture` / `pasture serve` | Run it. `--host` (default: the MagicDNS name), `--port`, `--https-port`, `--name`, `--state`, `--no-tailscale-serve`, `--tailscale-cert`. |
+| `pasture enroll [--new]` | QR code to enroll a device (one-time). |
+| `pasture tls init [--renew]` / `tls phone` | Your own CA and certificate; serve the CA for the phone. |
+| `pasture service install` / `uninstall` | Background service (systemd, launchd, Windows Startup). `--dry-run`; serve options after `--`. |
+| `pasture hooks claude\|grok [--install]` | Agent hooks that report to pasture. |
+| `pasture notify [--kind done\|blocked\|info] [--agent A] [--project P] TEXT` | Send an alert (`--hook AGENT EVENT` reads a hook's JSON on stdin). |
+| `pasture doctor [--json]` | Check everything; print fixes. |
+
+`PASTURE_*` environment variables ([config.py](gateway/pasture/config.py)) set
+the rest, e.g. `PASTURE_DICTATE_SERVER` and `PASTURE_DICTATE_MODEL`.
 
 ## Troubleshooting
 
-- **"tailscale serve needs permission"**: run
-  `sudo tailscale set --operator=$USER` once.
-- **The passkey prompt never appears**: the page needs a trusted HTTPS origin
-  with a domain name. Check that HTTPS certificates are on for the tailnet,
-  or, with your own CA, that full trust is on for it (iOS: Settings → General
-  → About → Certificate Trust Settings).
-- **Logged out after an update**: sessions live in memory; unlock again.
-- **Logs**: `journalctl --user -u pasture -f`. Each recording logs its timings
-  (never audio or text).
+`pasture doctor` first; then [docs/troubleshooting.md](docs/troubleshooting.md).
 
 ## Development
 
