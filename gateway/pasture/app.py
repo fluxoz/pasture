@@ -443,7 +443,7 @@ class Gateway:
         self.require(request, touch=False)
         kind = request.query.get("k")
         target = request.query.get("t", "")
-        lines = max(1, min(int(request.query.get("n", "40") or 40), 200))
+        lines = max(1, min(int(request.query.get("n", "40") or 40), 2000))  # 2000: Select text
         try:
             if kind == "agent" and self.herdr:
                 text = await self.herdr.preview(request.query.get("s"), target, lines)

@@ -230,11 +230,28 @@ export class TermView {
     return lines.join('\n').replace(/\s+$/, '');
   }
 
-  selection() {
-    return this.term.getSelection();
+  /** Everything in the buffer (scrollback included): for selecting text. */
+  allText() {
+    const buf = this.term.buffer.active;
+    const lines = [];
+    for (let y = 0; y < buf.length; y++) {
+      const line = buf.getLine(y);
+      const text = line?.translateToString(true) ?? '';
+      if (line?.isWrapped && lines.length) lines[lines.length - 1] += text;
+      else lines.push(text);
+    }
+    return lines.join('\n').replace(/\s+$/, '');
   }
 
-  // -- touch: one finger scrolls (as wheel events), two fingers zoom ----
+  /** Which screen row a point is on, counted from the bottom (0: the last row). */
+  rowFromBottom(clientY) {
+    const box = this.term.element.getBoundingClientRect();
+    const row = Math.floor(((clientY - box.top) / box.height) * this.term.rows);
+    return Math.max(0, Math.min(this.term.rows - 1, this.term.rows - 1 - row));
+  }
+
+  // -- touch: one finger scrolls (as wheel events), two fingers zoom, a hold
+  // selects text (hooks.onHold) ----
 
   touch() {
     const host = this.host;
@@ -242,6 +259,8 @@ export class TermView {
     let pinch = null;
     let acc = 0;
     let scrolling = false;
+    let holdTimer = 0;
+    let held = false;
     const dist = (t) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
     host.addEventListener(
       'touchstart',
@@ -253,7 +272,14 @@ export class TermView {
           start = { x: e.touches[0].clientX, y: e.touches[0].clientY };
           acc = 0;
           scrolling = false;
+          held = false;
+          const y = start.y;
+          holdTimer = setTimeout(() => {
+            held = true;
+            this.hooks.onHold?.(y);
+          }, 500);
         }
+        if (e.touches.length !== 1) clearTimeout(holdTimer);
       },
       { passive: true, capture: true },
     );
@@ -269,6 +295,8 @@ export class TermView {
         if (!start || e.touches.length !== 1) return;
         const t = e.touches[0];
         const dy = start.y - t.clientY;
+        if (!scrolling && Math.abs(dy) < 8 && Math.abs(start.x - t.clientX) < 8) return;
+        clearTimeout(holdTimer);
         if (!scrolling && Math.abs(dy) < 8) return;
         scrolling = true;
         e.preventDefault();
@@ -293,12 +321,15 @@ export class TermView {
       },
       { passive: false, capture: true },
     );
-    const end = () => {
+    const end = (e) => {
+      clearTimeout(holdTimer);
+      if (held) e.preventDefault?.(); // a hold is not a tap: no keyboard
+      held = false;
       if (pinch) this.fitNow();
       pinch = null;
       start = null;
     };
-    host.addEventListener('touchend', end, { passive: true, capture: true });
+    host.addEventListener('touchend', end, { passive: false, capture: true });
     host.addEventListener('touchcancel', end, { passive: true, capture: true });
   }
 

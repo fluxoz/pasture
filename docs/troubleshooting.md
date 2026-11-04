@@ -69,14 +69,28 @@ Photos or the camera; iOS asks the first time.
 ## Dictation
 
 **The mic does nothing or "Microphone permission denied".** Allow the
-microphone for the app (iOS: Settings → the app, or Settings → Safari →
-Microphone). In the installed app iOS asks again after a restart.
+microphone for the app (iOS: Settings → Apps → Safari → Microphone).
+
+**iOS asks for the microphone again.** iOS keeps a home-screen app's
+microphone permission only until the app is closed (and before 0.6.1 it also
+lost it on every terminal you opened). So expect one prompt per launch. It may
+stop asking if you also allow it in Safari: open the same address in Safari,
+then aA → Website Settings → Microphone → Allow (iOS does not promise this
+carries over to the home-screen app).
 
 **The first words are slow.** The model loads when pasture starts; give it a
 few seconds after a restart. A GPU build of whisper.cpp makes the rest fast.
 
 **It sends too early or too late.** In a terminal's ⋮ menu, change "Stop when
 I pause" (0.6 to 2.5 s, or off) and whether it presses Enter.
+
+## Selecting and copying
+
+**I can't select text in the terminal.** Hold the terminal (or ⋮ → Select
+text): its text opens as plain text, where the phone's own selection works
+(hold a word, drag the handles, Copy), or tap **All**. Agents and tmux show
+their whole recent history there, not only the screen. To paste, use the
+paste key in the key bar.
 
 ## Logs
 

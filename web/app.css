@@ -708,6 +708,49 @@ select {
   z-index: 20;
 }
 .toast.show { opacity: 1; pointer-events: auto; }
+
+/* Select text: the terminal's text as plain text, which the phone can select natively. */
+.select-view {
+  position: fixed;
+  inset: 0;
+  z-index: 15;
+  display: flex;
+  flex-direction: column;
+  background: var(--mantle);
+  padding: var(--sat) var(--sar) var(--sab) var(--sal);
+}
+.select-bar { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--surface1); }
+.select-hint { flex: 1; min-width: 0; color: var(--faint); font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.select-btn {
+  flex: none;
+  height: 36px;
+  padding: 0 12px;
+  border-radius: 10px;
+  border: 1px solid var(--surface1);
+  background: var(--surface0);
+  color: var(--text);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+}
+.select-btn .nf { color: var(--accent); font-size: 17px; }
+.select-btn.primary { background: var(--accent); border-color: transparent; color: var(--mantle); font-weight: 700; }
+.select-text {
+  flex: 1;
+  margin: 0;
+  padding: 12px 14px 28px;
+  overflow: auto;
+  font-family: "pasture-mono", monospace;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  -webkit-user-select: text;
+  user-select: text;
+  -webkit-touch-callout: default;
+}
 .toast.error { color: var(--red); }
 
 @media (prefers-reduced-motion: reduce) {

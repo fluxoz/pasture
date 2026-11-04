@@ -5,6 +5,7 @@ export const G = {
   robot: '\u{f06a9}',
   server: '󰒋',
   update: '󰚰',
+  select: '󰗧',
   download: '󰇚',
   term: '',
   tmux: '',

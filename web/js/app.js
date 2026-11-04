@@ -13,6 +13,7 @@ import { openSheet, closeSheet, item, items, tiles, tile, section, toggle, choic
 import { $, el, G, toast, storage, store, vibrate } from './util.js';
 import { updatesSheet, refreshUpdates, pendingUpdates } from './updates.js';
 import { machinesSheet, machinesChanged } from './machines.js';
+import { openSelect, closeSelect } from './select.js';
 
 const app = $('#app');
 const login = new Login();
@@ -256,6 +257,26 @@ function prefixFor(t) {
   return null;
 }
 
+// iOS drops a home-screen app's microphone grant on every same-page navigation
+// (pushState, back, hash changes), which made dictation ask again after each
+// terminal. So there the terminal is no history entry; the back button closes
+// it (iOS web apps have no back gesture to keep). Elsewhere, Back closes it.
+const IOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const TERM_HISTORY = !IOS;
+
+/** Select text in the terminal (a hold on it, or its menu): `fromBottom` is the row held. */
+function selectText(fromBottom = 0) {
+  if (!term) return;
+  const t = target;
+  term.term.blur(); // the keyboard away: room for the text
+  let load = null;
+  if (t.k === 'agent' || t.k === 'tmux') {
+    const q = t.k === 'agent' ? `k=agent&s=${encodeURIComponent(t.s || '')}&t=${encodeURIComponent(t.t)}` : `k=tmux&t=${encodeURIComponent(t.t)}`;
+    load = api(at(t.m, `/api/preview?${q}&n=2000`)).then((r) => r.text); // the pane's history, unwrapped
+  }
+  openSelect({ text: term.allText(), load, fromBottom });
+}
+
 async function openTerm(t) {
   closeSheet();
   if (term) term.dispose();
@@ -263,17 +284,19 @@ async function openTerm(t) {
   $('#title').textContent = t.m ? `${t.m} · ${t.title || t.k}` : t.title || t.k;
   $('#term-overlay').hidden = true;
   setView('term');
-  if (history.state?.term !== true) history.pushState({ term: true }, '');
+  if (TERM_HISTORY && history.state?.term !== true) history.pushState({ term: true }, '');
   keybar.setPrefix(prefixFor(t));
   term = new TermView($('#term-host'), t, {
     onStatus: termStatus,
     onExpired,
     transform: (d) => keybar.transform(d),
+    onHold: (y) => selectText(term.rowFromBottom(y)),
   });
   await term.open();
 }
 
 function closeTerm(fromHistory = false) {
+  closeSelect();
   if (dict.state !== 'idle') {
     recorder.cancel();
     endDictation();
@@ -283,7 +306,7 @@ function closeTerm(fromHistory = false) {
   target = null;
   $('#term-overlay').hidden = true;
   setView('dash');
-  if (!fromHistory && history.state?.term === true) history.back();
+  if (TERM_HISTORY && !fromHistory && history.state?.term === true) history.back();
 }
 
 function termStatus(status, msg) {
@@ -302,7 +325,6 @@ function termStatus(status, msg) {
 function termMenu() {
   if (!term) return;
   const t = target;
-  const sel = term.selection();
   const copy = (text, what) =>
     navigator.clipboard
       .writeText(text)
@@ -315,7 +337,7 @@ function termMenu() {
     sub: { agent: `herdr agent · ${t.t}`, herdr: `herdr · ${t.s || 'default'}`, tmux: 'tmux session', shell: 'login shell' }[t.k],
     body: [
       tiles(
-        sel && tile({ icon: G.copy, label: 'Copy selection', onSelect: () => copy(sel, 'Selection') }),
+        tile({ icon: G.select, label: 'Select text', onSelect: () => selectText(0) }),
         tile({ icon: G.copy, label: 'Copy screen', onSelect: () => copy(term.screenText(), 'Screen') }),
         found && tile({ icon: G.send, label: 'Prompt', onSelect: () => dash.promptSheet(t.s, found.p) }),
         found &&
